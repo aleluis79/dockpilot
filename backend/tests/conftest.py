@@ -1,0 +1,271 @@
+import asyncio
+import pytest
+import pytest_asyncio
+from unittest.mock import AsyncMock, MagicMock
+from httpx import AsyncClient, ASGITransport
+from aiodocker.exceptions import DockerError
+
+from app.main import app
+from app.core.docker import get_docker
+
+
+class FakeExecStream:
+    def __init__(self):
+        self.closed = False
+        self.written_data = []
+        self._output_queue = asyncio.Queue()
+
+    async def _init(self):
+        pass
+
+    async def read_out(self):
+        if self.closed and self._output_queue.empty():
+            return None
+        try:
+            msg = await asyncio.wait_for(self._output_queue.get(), timeout=0.5)
+            return msg
+        except (asyncio.TimeoutError, TimeoutError):
+            return None
+
+    async def write_in(self, data: bytes):
+        self.written_data.append(data)
+        if b"exit" in data:
+            self.closed = True
+        elif b"echo" in data:
+            mock_msg = MagicMock()
+            mock_msg.data = b"hola dockpilot\r\n"
+            mock_msg.stream = 1
+            await self._output_queue.put(mock_msg)
+
+    async def close(self):
+        self.closed = True
+
+
+class FakeExec:
+    def __init__(self, exec_id: str, tty: bool = True):
+        self.id = exec_id
+        self.tty = tty
+        self.stream = FakeExecStream()
+        self.resized_with = None
+
+    async def resize(self, h: int = None, w: int = None):
+        self.resized_with = {"h": h, "w": w}
+
+    def start(self, timeout=None, detach=False):
+        mock_prompt = MagicMock()
+        mock_prompt.data = b"/ # "
+        mock_prompt.stream = 1
+        self.stream._output_queue.put_nowait(mock_prompt)
+        return self.stream
+
+
+class FakeDockerContainer:
+    def __init__(self, cid: str, name: str, image: str, status: str, state: str, ports: list = None):
+        self.id = cid
+        self._name = name
+        self._image = image
+        self._status = status
+        self._state = state
+        self._ports = ports or []
+
+    def _as_summary_dict(self):
+        return {
+            "Id": self.id,
+            "Names": [self._name],
+            "Image": self._image,
+            "State": self._state,
+            "Status": f"Up 2 hours ({self._status})" if self._status == "running" else f"Exited ({self._status})",
+            "Created": 1727290000,
+            "Ports": self._ports,
+        }
+
+    async def show(self):
+        return {
+            "Id": self.id,
+            "Name": self._name,
+            "Config": {
+                "Image": self._image,
+                "Cmd": ["nginx", "-g", "daemon off;"],
+                "Env": ["PATH=/usr/local/sbin", "PORT=80"],
+                "Labels": {"maintainer": "DockPilot"},
+            },
+            "State": {
+                "Status": self._status,
+                "Running": self._status == "running",
+                "Paused": self._status == "paused",
+                "Restarting": self._status == "restarting",
+            },
+            "Created": "2026-09-25T12:00:00Z",
+            "HostConfig": {
+                "PortBindings": {"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]},
+            },
+            "Mounts": [{"Source": "/var/data", "Destination": "/app/data", "Mode": "rw"}],
+            "NetworkSettings": {
+                "Networks": {"bridge": {"IPAddress": "172.17.0.2"}}
+            },
+        }
+
+    async def start(self):
+        self._status = "running"
+        self._state = "running"
+        return True
+
+    async def stop(self, t=10):
+        self._status = "exited"
+        self._state = "exited"
+        return True
+
+    async def restart(self, t=10):
+        self._status = "running"
+        self._state = "running"
+        return True
+
+    async def pause(self):
+        self._status = "paused"
+        self._state = "paused"
+        return True
+
+    async def unpause(self):
+        self._status = "running"
+        self._state = "running"
+        return True
+
+    async def delete(self, force=False, v=False):
+        if self._status == "running" and not force:
+            raise DockerError(409, {"message": "You cannot remove a running container. Stop the container before attempting removal or force remove"})
+        return True
+
+    async def log(self, stdout=True, stderr=True, follow=False, tail=100, timestamps=True):
+        sample_logs = [
+            "2026-09-25T12:00:01.000000000Z Server initializing...\n",
+            "2026-09-25T12:00:02.000000000Z [info] Listening on 0.0.0.0:80\n",
+            "2026-09-25T12:00:03.000000000Z [warn] High connection volume\n",
+        ]
+        if not follow:
+            return sample_logs
+
+        async def _stream():
+            for line in sample_logs:
+                yield line
+
+        return _stream()
+
+    async def exec(self, cmd, stdout=True, stderr=True, stdin=True, tty=True, **kwargs):
+        if self._status != "running":
+            raise DockerError(400, {"message": f"Container {self.id} is not running"})
+        exec_instance = FakeExec(f"exec_{self.id}", tty=tty)
+        return exec_instance
+
+
+@pytest.fixture
+def mock_docker():
+    mock = MagicMock()
+    
+    # Setup mock containers repository
+    c_running = FakeDockerContainer(
+        cid="c123",
+        name="/web-app",
+        image="nginx:alpine",
+        status="running",
+        state="running",
+        ports=[{"IP": "0.0.0.0", "PrivatePort": 80, "PublicPort": 8080, "Type": "tcp"}],
+    )
+    c_exited = FakeDockerContainer(
+        cid="c456",
+        name="/db-postgres",
+        image="postgres:16",
+        status="exited",
+        state="exited",
+        ports=[],
+    )
+    
+    containers_db = {"c123": c_running, "c456": c_exited}
+    
+    async def fake_list(all=True, filters=None):
+        res = []
+        status_filter = None
+        if filters and "status" in filters:
+            status_filter = filters["status"]
+            if isinstance(status_filter, list):
+                status_filter = status_filter[0]
+
+        for c in containers_db.values():
+            if status_filter and c._status != status_filter:
+                continue
+            if not all and c._status != "running":
+                continue
+            res.append(c._as_summary_dict())
+        return res
+
+    async def fake_get(cid: str):
+        if cid in containers_db:
+            return containers_db[cid]
+        raise DockerError(404, {"message": f"No such container: {cid}"})
+
+    async def fake_create(config: dict, name: str = None):
+        c_name = f"/{name}" if name else f"/mock-{len(containers_db)+1}"
+        for existing in containers_db.values():
+            if existing._name == c_name:
+                raise DockerError(409, {"message": f"Conflict. The container name \"{c_name}\" is already in use"})
+
+        cid = f"new_{len(containers_db)+1:04d}"
+        new_c = FakeDockerContainer(
+            cid=cid,
+            name=c_name,
+            image=config.get("Image", "unknown"),
+            status="created",
+            state="created",
+            ports=[],
+        )
+        containers_db[cid] = new_c
+        return new_c
+
+    mock.containers = MagicMock()
+    mock.containers.list = AsyncMock(side_effect=fake_list)
+    mock.containers.get = AsyncMock(side_effect=fake_get)
+    mock.containers.create = AsyncMock(side_effect=fake_create)
+    mock.containers_db = containers_db
+
+    # Setup mock images repository
+    mock_local_images = [
+        {"Id": "sha256:img1", "RepoTags": ["nginx:alpine", "nginx:latest"], "Size": 25000000, "Created": 1727290000},
+        {"Id": "sha256:img2", "RepoTags": ["redis:alpine"], "Size": 35000000, "Created": 1727280000},
+    ]
+
+    async def fake_images_list():
+        return mock_local_images
+
+    async def fake_query_json(endpoint: str, method: str = "GET", params: dict = None):
+        if endpoint == "images/search":
+            term = (params or {}).get("term", "")
+            return [
+                {"name": f"{term}", "description": f"Official {term} image", "is_official": True, "star_count": 15000},
+                {"name": f"bitnami/{term}", "description": f"Bitnami {term}", "is_official": False, "star_count": 1200},
+            ]
+        return []
+
+    mock.images = MagicMock()
+    mock.images.list = AsyncMock(side_effect=fake_images_list)
+    mock.images.pull = AsyncMock(return_value=[{"status": "Download complete"}])
+    mock.images.inspect = AsyncMock(return_value={"Id": "sha256:mock"})
+    mock._query_json = AsyncMock(side_effect=fake_query_json)
+    mock.close = AsyncMock()
+    return mock
+
+
+@pytest_asyncio.fixture
+async def async_client(mock_docker):
+    app.dependency_overrides[get_docker] = lambda: mock_docker
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def test_client(mock_docker):
+    from starlette.testclient import TestClient
+    app.dependency_overrides[get_docker] = lambda: mock_docker
+    with TestClient(app) as client:
+        yield client
+    app.dependency_overrides.clear()

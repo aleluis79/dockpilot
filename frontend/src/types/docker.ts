@@ -1,0 +1,79 @@
+export interface PortMapping {
+  ip?: string;
+  private_port: number;
+  public_port?: number;
+  type: string;
+}
+
+export type ContainerState = 'running' | 'exited' | 'paused' | 'restarting' | 'created' | 'dead';
+
+export interface ContainerSummary {
+  id: string;
+  name: string;
+  image: string;
+  status: ContainerState | string;
+  state: string;
+  created: number;
+  ports: PortMapping[];
+}
+
+export interface ContainerDetail extends ContainerSummary {
+  command?: string;
+  env: string[];
+  labels: Record<string, string>;
+  mounts: Array<Record<string, unknown>>;
+  networks: string[];
+}
+
+export interface ContainerActionResponse {
+  id: string;
+  action: string;
+  success: boolean;
+  message: string;
+}
+
+export interface ImageSearchResult {
+  name: string;
+  description: string;
+  is_official: boolean;
+  star_count: number;
+}
+
+export interface LocalImageSummary {
+  id: string;
+  tags: string[];
+  size: number;
+  created: number;
+}
+
+export interface PortBindingConfig {
+  host_port: number;
+  container_port: number;
+  protocol: 'tcp' | 'udp';
+}
+
+export interface VolumeBindingConfig {
+  host_path: string;
+  container_path: string;
+  mode: 'rw' | 'ro';
+}
+
+export interface CreateContainerRequest {
+  image: string;
+  name?: string;
+  ports: PortBindingConfig[];
+  env: Record<string, string>;
+  volumes: VolumeBindingConfig[];
+  command?: string;
+  restart_policy: 'no' | 'always' | 'unless-stopped' | 'on-failure';
+  start_now: boolean;
+}
+
+export interface CreateContainerResponse {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  started: boolean;
+  message: string;
+}
