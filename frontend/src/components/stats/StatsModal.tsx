@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react'
+import { MODAL_OVERLAY } from '../ui/modalOverlay'
 import { Activity, X, Cpu, MemoryStick, Network, HardDrive, Eraser } from 'lucide-react'
 import type { ContainerSummary } from '../../types/docker'
 import type { StatsHistoryPoint } from '../../types/stats'
@@ -21,9 +22,9 @@ const LEVEL_BAR: Record<StatsLevel, string> = {
 }
 
 const LEVEL_TEXT: Record<StatsLevel, string> = {
-  ok: 'text-emerald-400',
-  warn: 'text-amber-400',
-  critical: 'text-rose-400',
+  ok: 'text-emerald-700 dark:text-emerald-400',
+  warn: 'text-amber-700 dark:text-amber-400',
+  critical: 'text-rose-700 dark:text-rose-400',
 }
 
 const levelOf = (value: number): StatsLevel => {
@@ -58,9 +59,9 @@ const MetricCard: React.FC<MetricCardProps> = ({
   const level = levelOf(percent)
 
   return (
-    <div className="p-4 bg-zinc-950/60 border border-zinc-800 rounded-xl flex flex-col gap-3">
+    <div className="p-4 bg-inset/60 border border-default rounded-xl flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-2 text-xs uppercase tracking-wider font-semibold text-zinc-500">
+        <span className="flex items-center gap-2 text-xs uppercase tracking-wider font-semibold text-fg-muted">
           {icon}
           {title}
         </span>
@@ -75,7 +76,7 @@ const MetricCard: React.FC<MetricCardProps> = ({
         aria-valuenow={Math.round(percent) || 0}
         aria-valuemin={0}
         aria-valuemax={100}
-        className="h-2 w-full bg-zinc-800 rounded-full overflow-hidden"
+        className="h-2 w-full bg-elevated rounded-full overflow-hidden"
       >
         <div
           data-level={level}
@@ -86,7 +87,7 @@ const MetricCard: React.FC<MetricCardProps> = ({
 
       <StatsSparkline points={history} metric={metric} color={color} height={28} />
 
-      {footer && <div className="text-[11px] text-zinc-500 font-mono">{footer}</div>}
+      {footer && <div className="text-[11px] text-fg-muted font-mono">{footer}</div>}
     </div>
   )
 }
@@ -99,7 +100,7 @@ interface InfoCardProps {
 }
 
 const InfoCard: React.FC<InfoCardProps> = ({ title, icon, accent, rows }) => (
-  <div className="p-4 bg-zinc-950/60 border border-zinc-800 rounded-xl flex flex-col gap-3">
+  <div className="p-4 bg-inset/60 border border-default rounded-xl flex flex-col gap-3">
     <span className={`flex items-center gap-2 text-xs uppercase tracking-wider font-semibold ${accent}`}>
       {icon}
       {title}
@@ -107,8 +108,8 @@ const InfoCard: React.FC<InfoCardProps> = ({ title, icon, accent, rows }) => (
     <div className="space-y-1.5">
       {rows.map((row) => (
         <div key={row.label} className="flex items-center justify-between text-xs">
-          <span className="text-zinc-500">{row.label}</span>
-          <span className="font-mono text-zinc-200 tabular-nums">{row.value}</span>
+          <span className="text-fg-muted">{row.label}</span>
+          <span className="font-mono text-fg tabular-nums">{row.value}</span>
         </div>
       ))}
     </div>
@@ -138,30 +139,30 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-black/85 backdrop-blur-sm animate-in fade-in duration-150 overflow-hidden font-sans"
+      className={`${MODAL_OVERLAY} p-3 sm:p-6 overflow-hidden font-sans`}
       onClick={onClose}
     >
       <div
-        className="w-full max-w-4xl max-h-[85vh] flex flex-col bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden"
+        className="w-full max-w-4xl max-h-[85vh] flex flex-col bg-surface border border-default rounded-2xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="shrink-0 flex items-center justify-between gap-3 p-4 border-b border-zinc-800/80 bg-zinc-900/90">
+        <div className="shrink-0 flex items-center justify-between gap-3 p-4 border-b border-default/80 bg-surface/90">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="p-2 bg-blue-500/10 text-blue-400 rounded-xl border border-blue-500/20 shrink-0">
+            <div className="p-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-xl border border-blue-500/20 shrink-0">
               <Activity className="w-5 h-5" />
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base font-semibold text-zinc-100">Métricas en Vivo</h2>
-                <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-zinc-800 text-zinc-300 truncate">
+                <h2 className="text-base font-semibold text-fg">Métricas en Vivo</h2>
+                <span className="font-mono text-xs px-2 py-0.5 rounded-md bg-elevated text-fg truncate">
                   {cleanName}
                 </span>
                 <span
                   className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-medium ${
                     connected
-                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                      ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20'
+                      : 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20'
                   }`}
                 >
                   <span
@@ -172,7 +173,7 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
                   <span>{connected ? 'En vivo' : 'Conectando...'}</span>
                 </span>
               </div>
-              <p className="text-xs text-zinc-500 font-mono mt-0.5">{container.image}</p>
+              <p className="text-xs text-fg-muted font-mono mt-0.5">{container.image}</p>
             </div>
           </div>
 
@@ -181,7 +182,7 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
               type="button"
               onClick={clearHistory}
               title="Limpiar historial"
-              className="p-1.5 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer"
+              className="p-1.5 text-fg-muted hover:text-fg hover:bg-fg/10 rounded-lg transition-colors flex items-center gap-1.5 text-xs font-medium cursor-pointer"
             >
               <Eraser className="w-4 h-4" />
               <span className="hidden sm:inline">Limpiar</span>
@@ -190,7 +191,7 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
               type="button"
               onClick={onClose}
               title="Cerrar métricas"
-              className="p-1.5 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+              className="p-1.5 text-fg-muted hover:text-fg hover:bg-fg/10 rounded-lg transition-colors cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -200,14 +201,14 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {error && (
-            <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl text-sm">
+            <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-700 dark:text-rose-400 rounded-xl text-sm">
               {error}
             </div>
           )}
 
           {!currentStats && !error && (
-            <div className="py-12 text-center text-zinc-500">
-              <Activity className="w-8 h-8 mx-auto mb-2 animate-pulse text-blue-500" />
+            <div className="py-12 text-center text-fg-muted">
+              <Activity className="w-8 h-8 mx-auto mb-2 animate-pulse text-blue-600 dark:text-blue-500" />
               <p className="text-sm">Esperando métricas...</p>
             </div>
           )}
@@ -241,7 +242,7 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
                 <InfoCard
                   title="Red"
                   icon={<Network className="w-3.5 h-3.5" />}
-                  accent="text-emerald-400"
+                  accent="text-emerald-700 dark:text-emerald-400"
                   rows={[
                     { label: 'Recibido', value: formatBytes(currentStats.network_rx_bytes) },
                     { label: 'Transmitido', value: formatBytes(currentStats.network_tx_bytes) },
@@ -250,7 +251,7 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
                 <InfoCard
                   title="Disco"
                   icon={<HardDrive className="w-3.5 h-3.5" />}
-                  accent="text-amber-400"
+                  accent="text-amber-700 dark:text-amber-400"
                   rows={[
                     { label: 'Lectura', value: formatBytes(currentStats.block_read_bytes) },
                     { label: 'Escritura', value: formatBytes(currentStats.block_write_bytes) },
@@ -262,7 +263,7 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
         </div>
 
         {/* Footer */}
-        <div className="shrink-0 px-4 py-3 border-t border-zinc-800/80 bg-zinc-900/90 flex items-center justify-between gap-3 text-[11px] text-zinc-500">
+        <div className="shrink-0 px-4 py-3 border-t border-default/80 bg-surface/90 flex items-center justify-between gap-3 text-[11px] text-fg-muted">
           <span>
             {currentStats
               ? `Última muestra: ${currentStats.timestamp}`
@@ -271,7 +272,7 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded-lg transition-colors cursor-pointer shrink-0"
+            className="px-3 py-1 bg-elevated hover:bg-fg/10 text-fg text-xs rounded-lg transition-colors cursor-pointer shrink-0"
           >
             Cerrar
           </button>

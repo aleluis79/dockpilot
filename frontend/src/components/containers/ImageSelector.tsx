@@ -81,17 +81,17 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
   return (
     <div className="space-y-3">
       {/* Selector de Pestañas */}
-      <div className="flex items-center gap-1 p-1 bg-zinc-950 rounded-xl border border-zinc-800 text-xs">
+      <div className="flex items-center gap-1 p-1 bg-inset rounded-xl border border-default text-xs">
         <button
           type="button"
           onClick={() => setTab('presets')}
           className={`flex-1 py-1.5 px-3 rounded-lg font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
             tab === 'presets'
-              ? 'bg-zinc-800 text-zinc-100 shadow-sm'
-              : 'text-zinc-400 hover:text-zinc-200'
+              ? 'bg-elevated text-fg shadow-sm'
+              : 'text-fg-muted hover:text-fg'
           }`}
         >
-          <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+          <Sparkles className="w-3.5 h-3.5 text-amber-700 dark:text-amber-400" />
           <span>Plantillas</span>
         </button>
 
@@ -100,11 +100,11 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
           onClick={() => setTab('local')}
           className={`flex-1 py-1.5 px-3 rounded-lg font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
             tab === 'local'
-              ? 'bg-zinc-800 text-zinc-100 shadow-sm'
-              : 'text-zinc-400 hover:text-zinc-200'
+              ? 'bg-elevated text-fg shadow-sm'
+              : 'text-fg-muted hover:text-fg'
           }`}
         >
-          <HardDrive className="w-3.5 h-3.5 text-blue-400" />
+          <HardDrive className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
           <span>Locales</span>
         </button>
 
@@ -113,11 +113,11 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
           onClick={() => setTab('search')}
           className={`flex-1 py-1.5 px-3 rounded-lg font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
             tab === 'search'
-              ? 'bg-zinc-800 text-zinc-100 shadow-sm'
-              : 'text-zinc-400 hover:text-zinc-200'
+              ? 'bg-elevated text-fg shadow-sm'
+              : 'text-fg-muted hover:text-fg'
           }`}
         >
-          <Search className="w-3.5 h-3.5 text-emerald-400" />
+          <Search className="w-3.5 h-3.5 text-emerald-700 dark:text-emerald-400" />
           <span>Docker Hub</span>
         </button>
       </div>
@@ -134,15 +134,15 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
                 onClick={() => onSelectImage(p.image)}
                 className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
                   isSelected
-                    ? 'bg-blue-600/15 border-blue-500/50 text-blue-200'
-                    : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700 text-zinc-300'
+                    ? 'bg-blue-600/15 border-blue-500/50 text-blue-800 dark:text-blue-200'
+                    : 'bg-inset border-default hover:border-strong text-fg'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="font-semibold text-xs text-zinc-100">{p.name}</span>
+                  <span className="font-semibold text-xs text-fg">{p.name}</span>
                   {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />}
                 </div>
-                <div className="font-mono text-[11px] text-zinc-500 truncate mt-0.5">{p.image}</div>
+                <div className="font-mono text-[11px] text-fg-muted truncate mt-0.5">{p.image}</div>
               </button>
             )
           })}
@@ -153,12 +153,12 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
       {tab === 'local' && (
         <div className="space-y-2">
           {loadingLocal ? (
-            <div className="p-6 text-center text-xs text-zinc-500 flex items-center justify-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
+            <div className="p-6 text-center text-xs text-fg-muted flex items-center justify-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-500" />
               <span>Cargando imágenes del host...</span>
             </div>
           ) : localImages.length === 0 ? (
-            <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl text-center text-xs text-zinc-500">
+            <div className="p-4 bg-inset border border-default rounded-xl text-center text-xs text-fg-muted">
               No hay imágenes locales descargadas en el daemon.
             </div>
           ) : (
@@ -173,15 +173,15 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
                       onClick={() => onSelectImage(tag)}
                       className={`w-full p-2 rounded-xl border text-left text-xs transition-all flex items-center justify-between cursor-pointer ${
                         isSelected
-                          ? 'bg-blue-600/15 border-blue-500/50 text-blue-200'
-                          : 'bg-zinc-950 border-zinc-800/80 hover:bg-zinc-800/50 text-zinc-300'
+                          ? 'bg-blue-600/15 border-blue-500/50 text-blue-800 dark:text-blue-200'
+                          : 'bg-inset border-default/80 hover:bg-fg/10 text-fg'
                       }`}
                     >
                       <div className="flex items-center gap-2 truncate">
-                        <Box className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
+                        <Box className="w-3.5 h-3.5 text-fg-muted shrink-0" />
                         <span className="font-mono truncate">{tag}</span>
                       </div>
-                      <span className="text-[11px] text-zinc-500 shrink-0">
+                      <span className="text-[11px] text-fg-muted shrink-0">
                         {formatBytes(img.size)}
                       </span>
                     </button>
@@ -198,7 +198,7 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
         <div className="space-y-2.5">
           <div className="flex gap-2">
             <div className="relative flex-1">
-              <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Search className="w-3.5 h-3.5 text-fg-muted absolute left-3 top-1/2 -translate-y-1/2" />
               <input
                 type="text"
                 placeholder="Buscar imagen en Docker Hub (ej. redis, mongo)..."
@@ -211,7 +211,7 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
                     handleSearch()
                   }
                 }}
-                className="w-full pl-8 pr-3 py-1.5 text-xs bg-zinc-950 border border-zinc-800 rounded-xl text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-blue-500/50"
+                className="w-full pl-8 pr-3 py-1.5 text-xs bg-inset border border-default rounded-xl text-fg placeholder-fg-muted focus:outline-none focus:border-blue-500/50"
               />
             </div>
             <button
@@ -233,7 +233,7 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
           </div>
 
           {searchError && (
-            <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs rounded-xl">
+            <div className="p-2.5 bg-rose-500/10 border border-rose-500/20 text-rose-700 dark:text-rose-400 text-xs rounded-xl">
               {searchError}
             </div>
           )}
@@ -249,27 +249,27 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
                     onClick={() => onSelectImage(res.name.includes(':') ? res.name : `${res.name}:latest`)}
                     className={`w-full p-2.5 rounded-xl border text-left text-xs transition-all flex flex-col gap-1 cursor-pointer ${
                       isSelected
-                        ? 'bg-blue-600/15 border-blue-500/50 text-blue-200'
-                        : 'bg-zinc-950 border-zinc-800 hover:bg-zinc-800/50 text-zinc-300'
+                        ? 'bg-blue-600/15 border-blue-500/50 text-blue-800 dark:text-blue-200'
+                        : 'bg-inset border-default hover:bg-fg/10 text-fg'
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5 font-mono font-medium text-zinc-100">
+                      <div className="flex items-center gap-1.5 font-mono font-medium text-fg">
                         <span>{res.name}</span>
                         {res.is_official && (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-sans">
+                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20 font-sans">
                             <ShieldCheck className="w-3 h-3" />
                             Oficial
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center gap-1 text-[11px] text-zinc-500">
-                        <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                      <div className="flex items-center gap-1 text-[11px] text-fg-muted">
+                        <Star className="w-3 h-3 text-amber-700 dark:text-amber-400 fill-amber-400" />
                         <span>{res.star_count.toLocaleString()}</span>
                       </div>
                     </div>
                     {res.description && (
-                      <p className="text-[11px] text-zinc-500 line-clamp-1">{res.description}</p>
+                      <p className="text-[11px] text-fg-muted line-clamp-1">{res.description}</p>
                     )}
                   </button>
                 )

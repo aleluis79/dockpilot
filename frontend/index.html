@@ -1,10 +1,34 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <title>DockPilot</title>
+    <!--
+      Script anti-parpadeo: se ejecuta de forma síncrona antes del bundle de
+      Vite para aplicar la clase `dark` con la preferencia persistida. Sin él,
+      React pintaría primero el tema oscuro por defecto y la página saltaría
+      al tema real en el primer render.
+    -->
+    <script>
+      ;(function () {
+        try {
+          var stored = localStorage.getItem('dockpilot-theme')
+          var mode = stored === 'light' || stored === 'dark' ? stored : 'system'
+          var resolved =
+            mode === 'system'
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : mode
+          document.documentElement.classList.toggle('dark', resolved === 'dark')
+          document.documentElement.setAttribute('data-theme', mode)
+        } catch (e) {
+          /* localStorage puede estar bloqueado: se mantiene el tema oscuro por defecto */
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

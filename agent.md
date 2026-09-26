@@ -47,6 +47,14 @@ Todo desarrollo en DockPilot sigue rigurosamente el ciclo SDD de 5 etapas:
 - **Linter & Typecheck**: Oxlint y `tsc -b`.
 - **Testing**: Vitest + `@testing-library/react` + `jsdom`.
 
+### Sistema de Temas (contrato transversal)
+- **Tokens semánticos**: los colores de superficie, texto y borde **no se escriben literals** en los componentes. Se usan los tokens declarados en `frontend/src/index.css` (`bg-base`, `bg-surface`, `bg-elevated`, `bg-inset`, `text-fg`, `text-fg-muted`, `text-fg-subtle`, `border-default`, `border-strong`).
+- **Prohibido** reintroducir clases de la paleta `zinc` en `src/**/*.tsx`; un test de arquitectura (`frontend/tests/theme-tokens.test.ts`) lo verifica automáticamente.
+- **Variante `dark`**: funciona por clase (`@custom-variant dark`), no por `prefers-color-scheme`. La clase `dark` se aplica a `document.documentElement` por el hook `useTheme`. No existe una clase `light`: el tema claro es la ausencia de `dark`.
+- **Default**: `:root` declara los valores **oscuros**, para que la interfaz no cambie de aspecto si el JavaScript no llega a ejecutarse.
+- **Superficies no HTML** (xterm.js, barras de scroll) leen los tokens por JavaScript o por variables CSS, nunca por hexadecimales fijos.
+- Especificación completa en `specs/06-theme-switcher.md`.
+
 ### Backend
 - **Framework**: FastAPI (Python 3.12+).
 - **Servidor ASGI**: Uvicorn con soporte `uvloop`.
@@ -62,21 +70,22 @@ Todo desarrollo en DockPilot sigue rigurosamente el ciclo SDD de 5 etapas:
 ```text
 dockpilot/
 ├── agent.md                    # Especificaciones maestras y reglas SDD
+├── Makefile                    # Comandos de trabajo (test, lint, build, serve)
 ├── specs/                      # Especificaciones funcionales por módulo (SDD)
 │   ├── template.md             # Plantilla estándar con Gherkin y tasks [ ]
 │   ├── 01-containers.md        # Spec: Ciclo de vida y gestión de contenedores
 │   ├── 02-realtime-logs.md     # Spec: Streaming de logs con WebSockets
-│   ├── 03-realtime-stats.md    # Spec: Métricas en vivo (CPU, RAM, Red)
-│   ├── 04-terminal.md          # Spec: Terminal interactivo con xterm.js
-│   └── 05-images.md            # Spec: Gestión y pull de imágenes
+│   ├── 03-create-container.md  # Spec: Alta de contenedores e imágenes
+│   ├── 04-realtime-stats.md    # Spec: Métricas en vivo (CPU, RAM, Red, Disco)
+│   ├── 05-terminal.md          # Spec: Terminal interactiva con xterm.js
+│   └── 06-theme-switcher.md    # Spec: Temas claro, oscuro y del sistema
 ├── backend/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── v1/
-│   │   │   │   ├── containers.py
-│   │   │   │   ├── images.py
-│   │   │   │   ├── system.py
-│   │   │   │   └── ws.py
+│   │   │   │   ├── containers.py   # REST de contenedores + /{id}/stats
+│   │   │   │   ├── images.py       # REST de imágenes locales y búsqueda
+│   │   │   │   └── ws.py           # WebSocket: /logs, /stats, /terminal
 │   │   │   └── router.py
 │   │   ├── core/
 │   │   │   ├── config.py
@@ -84,36 +93,42 @@ dockpilot/
 │   │   ├── schemas/
 │   │   │   ├── container.py
 │   │   │   ├── image.py
-│   │   │   └── stats.py
+│   │   │   ├── log.py
+│   │   │   ├── stats.py
+│   │   │   └── terminal.py
 │   │   ├── services/
 │   │   │   ├── container_service.py
 │   │   │   ├── image_service.py
-│   │   │   └── terminal_service.py
+│   │   │   └── stats_service.py
 │   │   └── main.py
 │   ├── tests/
-│   │   ├── conftest.py
+│   │   ├── conftest.py            # Fakes de aiodocker (contenedores, exec, stats)
 │   │   ├── test_containers.py
-│   │   ├── test_images.py
-│   │   ├── test_system.py
-│   │   └── test_ws.py
+│   │   ├── test_create_container.py
+│   │   ├── test_images_search.py
+│   │   ├── test_stats.py
+│   │   ├── test_ws_logs.py
+│   │   └── test_ws_terminal.py
+│   ├── pyproject.toml             # Configuración de Ruff (target py312)
 │   ├── requirements.txt
 │   └── .venv/
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── layout/
-│   │   │   ├── ui/
-│   │   │   ├── containers/
-│   │   │   ├── terminal/
-│   │   │   ├── logs/
-│   │   │   ├── stats/
+│   │   │   ├── layout/            # Navbar, ThemeToggle
+│   │   │   ├── ui/                # StatusBadge
+│   │   │   ├── containers/        # Tabla, acciones y modales de contenedor
+│   │   │   ├── terminal/          # TerminalModal, TerminalViewer, temas de xterm
+│   │   │   ├── logs/              # LogsModal, LogsViewer
+│   │   │   ├── stats/             # StatsModal, StatsSparkline
 │   │   │   └── images/
-│   │   ├── hooks/
-│   │   ├── services/
-│   │   ├── types/
+│   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats, useTheme
+│   │   ├── services/              # dockerApi.ts
+│   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts
+│   │   ├── utils/                 # format.ts (formatBytes, formatPercent)
 │   │   ├── App.tsx
 │   │   ├── main.tsx
-│   │   └── index.css
+│   │   └── index.css              # Tokens de tema (@theme inline + @custom-variant dark)
 │   ├── tests/
 │   │   ├── setup.ts
 │   │   ├── components/
@@ -139,11 +154,22 @@ dockpilot/
 
 ## 6. Comandos de Trabajo y Testing
 
+Desde la raíz del repositorio:
+
+```bash
+make up            # Levanta backend (8000) y frontend (5173)
+make down          # Detiene ambos servicios
+make test          # Suite completa: pytest + vitest
+make lint          # Ruff (backend) + Oxlint (frontend)
+make build         # Typecheck + build de producción del frontend
+```
+
 ### Backend
 ```bash
 cd backend
 source .venv/bin/activate
 pytest -v                                        # Ejecutar suite de pruebas
+python -m ruff check app                         # Lint (config en backend/pyproject.toml)
 uvicorn app.main:app --reload --host 127.0.0.1  # Iniciar servidor
 ```
 
@@ -155,6 +181,8 @@ pnpm run lint     # Oxlint
 pnpm run build    # Typecheck (tsc -b) y build con Vite
 pnpm dev          # Iniciar frontend en desarrollo
 ```
+
+> `make backend-lint` es un **quality gate real**: falla ante cualquier error de Ruff. No reintroducir `|| echo "..."` en los targets del `Makefile`, porque ocultaría los fallos.
 
 ---
 
@@ -172,3 +200,7 @@ pnpm dev          # Iniciar frontend en desarrollo
    - Los schemas de Pydantic y las interfaces de TypeScript deben coincidir exactamente campo por campo.
 6. **Validación Continua**:
    - No considerar completada una tarea hasta que todos los tests del spec pasen exitosamente (`pytest` y `vitest`).
+7. **Colores siempre por Token**:
+   - **Prohibido** escribir colores literales de superficie, texto o borde (`zinc-*`, `gray-*`, `slate-*`, hexadecimales) en componentes. Usar los tokens del sistema de temas. La única excepción son las paletas ANSI de xterm.js, que viven en `src/components/terminal/` como mapas de tema.
+8. **Idioma**:
+   - Toda la documentación (`agent.md`, `specs/*.md`) y los textos visibles de la interfaz están en **español**. Los comentarios de código también. No introducir texto en otro idioma ni caracteres CJK.

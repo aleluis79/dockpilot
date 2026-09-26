@@ -1,20 +1,97 @@
 @import "tailwindcss";
 
-/* Custom modern dark scrollbar */
+/* La variante `dark` funciona por clase, no por `prefers-color-scheme`: el
+   modo "system" se resuelve en JavaScript y se refleja en <html class="dark">.
+   Sin esto, elegir un tema manual sería imposible. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* `inline` es obligatorio: hace que las utilidades referencien la variable en
+   tiempo de ejecución en lugar de copiar su valor, que es lo que permite
+   conmutar el tema sin regenerar las hojas de estilo. Los modificadores de
+   opacidad (bg-surface/40) se resuelven vía color-mix() y siguen funcionando. */
+/* Los nombres de estas variables determinan los nombres de las utilidades:
+   `--color-default` genera `border-default`, `divide-default`, etc.
+   Nombrarlas `--color-border` generaría `border-border`, que es lo que
+   terminan usando los componentes si no se renombra. */
+@theme inline {
+  --color-base: var(--dp-base);
+  --color-surface: var(--dp-surface);
+  --color-elevated: var(--dp-elevated);
+  --color-inset: var(--dp-inset);
+  --color-fg: var(--dp-fg);
+  --color-fg-muted: var(--dp-fg-muted);
+  --color-fg-subtle: var(--dp-fg-subtle);
+  --color-default: var(--dp-border);
+  --color-strong: var(--dp-border-strong);
+}
+
+/* Valores por defecto = tema OSCURO, para que la interfaz no cambie de
+   aspecto si el JavaScript no llega a ejecutarse. */
+:root {
+  --dp-base: #09090b; /* zinc-950 */
+  --dp-surface: #18181b; /* zinc-900 */
+  --dp-elevated: #27272a; /* zinc-800 */
+  --dp-inset: #09090b; /* zinc-950 */
+  --dp-fg: #f4f4f5; /* zinc-100 */
+  --dp-fg-muted: #a1a1aa; /* zinc-400 */
+  --dp-fg-subtle: #71717a; /* zinc-600 */
+  --dp-border: #27272a; /* zinc-800 */
+  --dp-border-strong: #3f3f46; /* zinc-700 */
+}
+
+/* Tema claro: se aplica por ausencia de la clase `dark`, no con una clase
+   `light`, para no mantener dos clases sincronizadas. */
+html:not(.dark) {
+  --dp-base: #ffffff;
+  --dp-surface: #fafafa; /* zinc-50 */
+  --dp-elevated: #f4f4f5; /* zinc-100 */
+  --dp-inset: #f4f4f5;
+  --dp-fg: #18181b; /* zinc-900 */
+  --dp-fg-muted: #52525b; /* zinc-600 */
+  --dp-fg-subtle: #a1a1aa; /* zinc-400 */
+  --dp-border: #e4e4e7; /* zinc-200 */
+  --dp-border-strong: #d4d4d8; /* zinc-300 */
+}
+
+/* Barras de desplazamiento derivadas de los tokens */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #09090b;
+  background: var(--dp-base);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: var(--dp-border-strong);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: var(--dp-fg-subtle);
 }
+
+/* Animación de apertura de los overlays (modales).
+   Antes se usaba `animate-in fade-in duration-150`, que provenía del plugin
+   `tailwindcss-animate`: ese plugin no está instalado, así que las clases no
+   existían y el fundido nunca se ejecutó. Aquí se define de forma nativa. */
+@keyframes dp-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@utility animate-fade-in {
+  animation: dp-fade-in 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in {
+    animation: none;
+  }
+}
+

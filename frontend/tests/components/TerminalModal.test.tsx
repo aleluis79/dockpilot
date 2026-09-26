@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { TerminalModal } from '../../src/components/terminal/TerminalModal'
+import { ThemeProvider } from '../../src/components/layout/ThemeProvider'
 import type { ContainerSummary } from '../../src/types/docker'
 
 // Mock de @xterm/xterm y @xterm/addon-fit para entorno jsdom
@@ -47,11 +48,13 @@ describe('TerminalModal', () => {
 
   it('renders modal with container name and shell selector when open', () => {
     render(
+      <ThemeProvider>
       <TerminalModal
         isOpen={true}
         container={mockContainer}
         onClose={vi.fn()}
       />
+      </ThemeProvider>
     )
 
     expect(screen.getByText('Terminal')).toBeInTheDocument()
@@ -62,11 +65,13 @@ describe('TerminalModal', () => {
 
   it('does not render when isOpen is false', () => {
     render(
+      <ThemeProvider>
       <TerminalModal
         isOpen={false}
         container={mockContainer}
         onClose={vi.fn()}
       />
+      </ThemeProvider>
     )
 
     expect(screen.queryByText('Terminal')).not.toBeInTheDocument()
@@ -74,11 +79,13 @@ describe('TerminalModal', () => {
 
   it('allows switching shell between /bin/sh and /bin/bash', () => {
     render(
+      <ThemeProvider>
       <TerminalModal
         isOpen={true}
         container={mockContainer}
         onClose={vi.fn()}
       />
+      </ThemeProvider>
     )
 
     const select = screen.getByRole('combobox') as HTMLSelectElement
@@ -91,11 +98,13 @@ describe('TerminalModal', () => {
   it('calls onClose when close button is clicked', () => {
     const onClose = vi.fn()
     render(
+      <ThemeProvider>
       <TerminalModal
         isOpen={true}
         container={mockContainer}
         onClose={onClose}
       />
+      </ThemeProvider>
     )
 
     const closeBtn = screen.getByTitle('Cerrar terminal')

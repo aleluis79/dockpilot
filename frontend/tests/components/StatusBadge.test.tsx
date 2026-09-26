@@ -18,11 +18,14 @@ describe('StatusBadge', () => {
     expect(screen.getByText('restarting').className).toContain('amber')
   })
 
-  it('renders gray badge for exited status', () => {
+  it('renders neutral badge with theme tokens for exited status', () => {
     render(<StatusBadge status="exited" />)
     const badge = screen.getByText('exited')
     expect(badge).toBeInTheDocument()
-    expect(badge.className).toContain('zinc')
+    // El badge neutro usa tokens del sistema de temas, no colores literales
+    expect(badge.className).toContain('bg-elevated')
+    expect(badge.className).toContain('text-fg-muted')
+    expect(badge.className).not.toContain('zinc')
   })
 
   it('renders red badge for dead status', () => {

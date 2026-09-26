@@ -1,5 +1,6 @@
 import React from 'react'
 import { Anchor, RefreshCw, Plus } from 'lucide-react'
+import { ThemeToggle } from './ThemeToggle'
 
 interface NavbarProps {
   onRefresh: () => void
@@ -13,7 +14,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenCreateModal,
 }) => {
   return (
-    <header className="border-b border-zinc-800 bg-zinc-950/80 backdrop-blur sticky top-0 z-40">
+    <header className="border-b border-default bg-inset/80 backdrop-blur sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
@@ -21,12 +22,12 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <span className="font-bold text-zinc-100 tracking-tight text-lg">DockPilot</span>
-              <span className="text-[10px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20 font-semibold">
+              <span className="font-bold text-fg tracking-tight text-lg">DockPilot</span>
+              <span className="text-[10px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 font-semibold">
                 v0.1.0
               </span>
             </div>
-            <p className="text-[11px] text-zinc-500 leading-none">Gestor local de Docker</p>
+            <p className="text-[11px] text-fg-muted leading-none">Gestor local de Docker</p>
           </div>
         </div>
 
@@ -41,19 +42,21 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-xs text-zinc-400">
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-elevated border border-border text-xs text-fg-muted">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span className="font-mono">/var/run/docker.sock</span>
-            <span className="text-emerald-400 font-medium">Conectado</span>
+            <span className="text-emerald-700 dark:text-emerald-400 font-medium">Conectado</span>
           </div>
+
+          <ThemeToggle />
 
           <button
             onClick={onRefresh}
             disabled={loading}
-            className="p-2 text-zinc-400 hover:text-zinc-100 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 rounded-xl transition-all disabled:opacity-50 cursor-pointer"
+            className="p-2 text-fg-muted hover:text-fg bg-surface hover:bg-fg/10 border border-default rounded-xl transition-all disabled:opacity-50 cursor-pointer"
             title="Refrescar lista"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-400' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-blue-600 dark:text-blue-400' : ''}`} />
           </button>
         </div>
       </div>

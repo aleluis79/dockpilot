@@ -24,7 +24,7 @@ export const StatsSparkline: React.FC<StatsSparklineProps> = ({
     return (
       <div
         data-testid={`stats-sparkline-${label}`}
-        className="h-8 flex items-center justify-center text-[10px] uppercase tracking-wider text-zinc-600"
+        className="h-8 flex items-center justify-center text-[10px] uppercase tracking-wider text-fg-subtle"
       >
         Sin datos
       </div>

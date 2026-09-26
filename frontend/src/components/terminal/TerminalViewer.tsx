@@ -2,6 +2,8 @@ import React, { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { useTheme } from '../../hooks/useTheme'
+import { getTerminalTheme } from './terminalThemes'
 
 interface TerminalViewerProps {
   containerId: string
@@ -16,6 +18,7 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
   onStatusChange,
   onClearRef,
 }) => {
+  const { resolvedTheme } = useTheme()
   const terminalRef = useRef<HTMLDivElement | null>(null)
   const termInstanceRef = useRef<Terminal | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
@@ -23,10 +26,24 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
   const onStatusChangeRef = useRef(onStatusChange)
   const onClearRefRef = useRef(onClearRef)
 
+  // El tema solo se lee al construir el Terminal. Los cambios posteriores se
+  // aplican sobre la instancia viva (efecto siguiente) para no perder el
+  // buffer de salida ni la posición de scroll al conmutar.
+  const initialThemeRef = useRef(getTerminalTheme(resolvedTheme))
+
   useEffect(() => {
     onStatusChangeRef.current = onStatusChange
     onClearRefRef.current = onClearRef
   })
+
+  // Conmutar la paleta en caliente: se reassigna `options.theme` sobre la
+  // instancia viva, sin recrear el Terminal.
+  useEffect(() => {
+    const term = termInstanceRef.current
+    if (term) {
+      term.options.theme = getTerminalTheme(resolvedTheme)
+    }
+  }, [resolvedTheme])
 
   useEffect(() => {
     if (!terminalRef.current) return
@@ -40,29 +57,7 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
       fontSize: 13,
       lineHeight: 1.2,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace',
-      theme: {
-        background: '#09090b', // zinc-950
-        foreground: '#f4f4f5', // zinc-100
-        cursor: '#38bdf8',     // sky-400
-        cursorAccent: '#09090b',
-        selectionBackground: 'rgba(59, 130, 246, 0.35)',
-        black: '#18181b',
-        red: '#f43f5e',
-        green: '#10b981',
-        yellow: '#f59e0b',
-        blue: '#3b82f6',
-        magenta: '#d946ef',
-        cyan: '#06b6d4',
-        white: '#f4f4f5',
-        brightBlack: '#71717a',
-        brightRed: '#fb7185',
-        brightGreen: '#34d399',
-        brightYellow: '#fbbf24',
-        brightBlue: '#60a5fa',
-        brightMagenta: '#e879f9',
-        brightCyan: '#22d3ee',
-        brightWhite: '#ffffff',
-      },
+      theme: initialThemeRef.current,
     })
 
     const fitAddon = new FitAddon()
@@ -172,7 +167,7 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
     <div
       ref={terminalRef}
       onClick={() => termInstanceRef.current?.focus()}
-      className="w-full h-full min-h-[350px] p-3 bg-zinc-950 rounded-b-xl overflow-hidden font-mono cursor-text"
+      className="w-full h-full min-h-[350px] p-3 bg-inset rounded-b-xl overflow-hidden font-mono cursor-text"
     />
   )
 }
