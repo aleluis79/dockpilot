@@ -3,22 +3,57 @@ import { MODAL_OVERLAY } from '../ui/modalOverlay'
 import { AlertTriangle, Trash2, X } from 'lucide-react'
 import type { ContainerSummary } from '../../types/docker'
 
-interface DeleteConfirmModalProps {
-  container: ContainerSummary | null
-  onClose: () => void
-  onConfirm: (id: string, force: boolean) => void
+/**
+ * Descriptor genérico de lo que se va a eliminar.
+ * `ContainerSummary` cumple esta forma, así que el uso con contenedores no
+ * necesita cambiar (SPEC-07 §3.6).
+ */
+export interface DeletableTarget {
+  id: string;
+  name: string;
 }
+
+interface DeleteConfirmModalProps {
+  container: ContainerSummary | null;
+  onClose: () => void;
+  onConfirm: (id: string, force: boolean) => void;
+  /** Objetivo alternativo para recursos que no son contenedores (imágenes). */
+  target?: DeletableTarget | null;
+  title?: string;
+  description?: React.ReactNode;
+  warning?: React.ReactNode;
+  confirmLabel?: string;
+  forceLabel?: React.ReactNode;
+}
+
+const RUNNING_WARNING = (
+  <>
+    El contenedor está actualmente en ejecución. Debe detenerse primero o marcar la opción de
+    eliminación forzada.
+  </>
+)
 
 export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   container,
   onClose,
   onConfirm,
+  target,
+  title,
+  description,
+  warning,
+  confirmLabel,
+  forceLabel,
 }) => {
   const [force, setForce] = useState<boolean>(false)
 
-  if (!container) return null
+  // `target` tiene prioridad: es el modo genérico (imágenes)
+  const resolved: DeletableTarget | null =
+    target ?? (container ? { id: container.id, name: container.name } : null)
 
-  const isRunning = container.status.toLowerCase() === 'running'
+  if (!resolved) return null
+
+  const isRunning = container?.status.toLowerCase() === 'running'
+  const resolvedWarning = warning ?? (isRunning ? RUNNING_WARNING : null)
 
   return (
     <div
@@ -41,18 +76,23 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
           </button>
         </div>
 
-        <h3 className="text-lg font-semibold text-fg mb-2">¿Eliminar contenedor?</h3>
-        <p className="text-sm text-fg-muted mb-4">
-          Estás a punto de eliminar el contenedor{' '}
-          <span className="font-semibold text-fg">"{container.name}"</span> (
-          <code className="text-xs font-mono text-fg-muted">{container.id.slice(0, 12)}</code>). Esta
-          acción no se puede deshacer.
-        </p>
+        <h3 className="text-lg font-semibold text-fg mb-2">
+          {title ?? '¿Eliminar contenedor?'}
+        </h3>
+        {description ? (
+          <p className="text-sm text-fg-muted mb-4">{description}</p>
+        ) : (
+          <p className="text-sm text-fg-muted mb-4">
+            Estás a punto de eliminar el contenedor{' '}
+            <span className="font-semibold text-fg">"{resolved.name}"</span> (
+            <code className="text-xs font-mono text-fg-muted">{resolved.id.slice(0, 12)}</code>). Esta
+            acción no se puede deshacer.
+          </p>
+        )}
 
-        {isRunning && (
+        {resolvedWarning && (
           <div className="p-3 mb-4 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-700 dark:text-amber-300">
-            El contenedor está actualmente en ejecución. Debe detenerse primero o marcar la opción
-            de eliminación forzada.
+            {resolvedWarning}
           </div>
         )}
 
@@ -64,7 +104,12 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
             className="w-4 h-4 rounded border-strong bg-elevated text-rose-700 dark:text-rose-500 focus:ring-rose-500/30"
           />
           <span className="text-xs text-fg">
-            Forzar eliminación (<code className="font-mono text-rose-700 dark:text-rose-400">force=true</code>)
+            {forceLabel ?? (
+              <>
+                Forzar eliminación (
+                <code className="font-mono text-rose-700 dark:text-rose-400">force=true</code>)
+              </>
+            )}
           </span>
         </label>
 
@@ -77,13 +122,13 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
           </button>
           <button
             onClick={() => {
-              onConfirm(container.id, force)
+              onConfirm(resolved.id, force)
               onClose()
             }}
             className="px-4 py-2 text-sm font-medium text-white bg-rose-600 hover:bg-rose-500 rounded-xl transition-colors flex items-center gap-2"
           >
             <Trash2 className="w-4 h-4" />
-            Eliminar
+            {confirmLabel ?? 'Eliminar'}
           </button>
         </div>
       </div>

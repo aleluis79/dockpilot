@@ -9,8 +9,10 @@ import aiodocker
 from aiodocker.exceptions import DockerError
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
-from app.core.docker import get_docker
+from app.core.docker import docker_error_message, get_docker
+from app.schemas.image import ImagePullMessage
 from app.services.container_service import parse_docker_log_line
+from app.services.image_service import ImageService, normalize_image_ref
 from app.services.stats_service import StatsService
 
 DockerDep = Annotated[aiodocker.Docker, Depends(get_docker)]
@@ -128,6 +130,75 @@ async def container_stats_ws(
     finally:
         try:
             await websocket.close()
+        except Exception:
+            pass
+
+
+@router.websocket("/images/pull")
+async def image_pull_ws(
+    websocket: WebSocket,
+    docker: DockerDep,
+    image: str = Query(..., description="Referencia de imagen a descargar"),
+):
+    """Canal WebSocket para descargar una imagen emitiendo el progreso por capa."""
+    await websocket.accept()
+
+    # Se valida antes de contactar con el daemon: una referencia malformada
+    # receives un error y no lanza ninguna descarga.
+    try:
+        image_ref = normalize_image_ref(image)
+    except ValueError as e:
+        await websocket.send_json(
+            ImagePullMessage(type="error", image=image, code=400, message=str(e)).model_dump()
+        )
+        await websocket.close(code=1000)
+        return
+
+    await websocket.send_json(ImagePullMessage(type="start", image=image_ref).model_dump())
+
+    try:
+        # aclosing garantiza que el stream de aiodocker se cierre al terminar
+        # o al desconectarse el cliente, liberando la respuesta HTTP.
+        pull_stream = ImageService.stream_pull(docker.images, image_ref)
+        async with aclosing(pull_stream):
+            async for message in pull_stream:
+                await websocket.send_json(message.model_dump())
+
+        tags = [image_ref]
+        await websocket.send_json(
+            ImagePullMessage(
+                type="done", image=image_ref, id=image_ref, tags=tags
+            ).model_dump()
+        )
+    except WebSocketDisconnect:
+        # El cliente canceló la descarga cerrando el socket
+        pass
+    except DockerError as e:
+        # Los errores del registro llegan como DockerError durante la iteración,
+        # no como DockerStreamError (aiodocker 0.27.0).
+        try:
+            await websocket.send_json(
+                ImagePullMessage(
+                    type="error",
+                    image=image_ref,
+                    code=e.status,
+                    message=docker_error_message(e),
+                ).model_dump()
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            await websocket.send_json(
+                ImagePullMessage(
+                    type="error", image=image_ref, code=500, message=str(e)
+                ).model_dump()
+            )
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close(code=1000)
         except Exception:
             pass
 

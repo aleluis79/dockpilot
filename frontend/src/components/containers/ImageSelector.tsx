@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Search, Star, ShieldCheck, Box, HardDrive, Sparkles, Loader2 } from 'lucide-react'
 import { dockerApi } from '../../services/dockerApi'
-import type { ImageSearchResult, LocalImageSummary } from '../../types/docker'
+import type { ImageSearchResult, LocalImageSummary } from '../../types/image'
 
 interface ImageSelectorProps {
   selectedImage: string

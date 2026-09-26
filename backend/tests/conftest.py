@@ -206,6 +206,205 @@ class FakeDockerContainer:
         return exec_instance
 
 
+class FakeDockerImages:
+    """Doble de `aiodocker.DockerImages` con la semántica observada en el daemon real.
+
+    Detalles de fidelidad relevantes para SPEC-07:
+    - `images.list()` incluye `Containers` y `RepoDigests`.
+    - `inspect()` lanza `DockerError(404)` si la referencia no existe.
+    - `delete()` lanza `DockerError(409)` si la imagen está en uso y no se fuerza.
+    - `pull(stream=True)` es un método **síncrono** que devuelve un generador
+      asíncrono, y el error del registro emerge **durante la iteración**, no al
+      invocar `pull()` (comportamiento real de aiodocker 0.27.0).
+    """
+
+    def __init__(self):
+        self.list_payload = [
+            {
+                "Id": "sha256:img1",
+                "RepoTags": ["nginx:alpine", "nginx:latest"],
+                "RepoDigests": ["nginx@sha256:aaa1"],
+                "Size": 25000000,
+                "Created": 1727290000,
+                "Containers": 0,
+            },
+            {
+                "Id": "sha256:img2",
+                "RepoTags": ["redis:alpine"],
+                "RepoDigests": [],
+                "Size": 35000000,
+                "Created": 1727280000,
+                "Containers": 2,
+            },
+            {
+                "Id": "sha256:img3",
+                "RepoTags": ["<none>:<none>"],
+                "RepoDigests": ["<none>@<none>"],
+                "Size": 1000,
+                "Created": 1727270000,
+                "Containers": 0,
+            },
+        ]
+
+        self.details = {
+            "nginx:alpine": {
+                "Id": "sha256:img1",
+                "RepoTags": ["nginx:alpine", "nginx:latest"],
+                "RepoDigests": ["nginx@sha256:aaa1"],
+                "Size": 25000000,
+                "Created": "2026-09-25T12:00:00Z",
+                "Architecture": "amd64",
+                "Os": "linux",
+                "Config": {
+                    "Cmd": ["nginx", "-g", "daemon off;"],
+                    "Entrypoint": ["/docker-entrypoint.sh"],
+                    "Env": ["PATH=/usr/local/sbin", "NGINX_VERSION=1.27"],
+                    "ExposedPorts": {"80/tcp": {}, "443/tcp": {}},
+                    "WorkingDir": "",
+                    "User": "nginx",
+                    "Labels": {"maintainer": "NGINX Docker Maintainers"},
+                },
+                "RootFS": {"Type": "layers", "Layers": ["l1", "l2", "l3"]},
+            },
+            "redis:alpine": {
+                "Id": "sha256:img2",
+                "RepoTags": ["redis:alpine"],
+                "RepoDigests": [],
+                "Size": 35000000,
+                "Created": "2026-09-24T09:00:00Z",
+                "Architecture": "amd64",
+                "Os": "linux",
+                "Config": {
+                    "Cmd": ["redis-server"],
+                    "Entrypoint": ["docker-entrypoint.sh"],
+                    "Env": ["PATH=/usr/local/bin"],
+                    "ExposedPorts": {"6379/tcp": {}},
+                    "WorkingDir": "/data",
+                    "User": "",
+                    "Labels": {},
+                },
+                "RootFS": {"Type": "layers", "Layers": ["l1", "l2"]},
+            },
+        }
+
+        self.histories = {
+            "nginx:alpine": [
+                {
+                    "Id": "l3",
+                    "Created": 1727290000,
+                    "CreatedBy": "/bin/sh -c #(nop)  CMD [\"nginx\" \"-g\" \"daemon off;\"]",
+                    "Size": 1200,
+                    "Comment": "",
+                    "Tags": None,
+                },
+                {
+                    "Id": "l2",
+                    "Created": 1727289000,
+                    "CreatedBy": "RUN /bin/sh -c apk add --no-cache nginx",
+                    "Size": 24000000,
+                    "Comment": "",
+                    "Tags": None,
+                },
+            ]
+        }
+
+        # Referencias que el "registro" no conoce, para probar el error del pull
+        self.unknown_refs = {"no-existe-este-repo-xyz123"}
+        # Referencias cuya historia falla, para probar la tolerancia del detalle
+        self.history_error_refs: set = set()
+
+    async def list(self, **kwargs):
+        return self.list_payload
+
+    def _resolve(self, name: str):
+        if name in self.details:
+            return self.details[name]
+        for ref, detail in self.details.items():
+            if name == detail["Id"] or (name and name in detail["RepoTags"]):
+                return detail
+        return None
+
+    async def inspect(self, name: str):
+        detail = self._resolve(name)
+        if detail is None:
+            raise DockerError(404, {"message": f"No such image: {name}"})
+        return detail
+
+    async def history(self, name: str):
+        detail = self._resolve(name)
+        if detail is None:
+            raise DockerError(404, {"message": f"No such image: {name}"})
+        if any(name == ref or name in self.details[ref]["RepoTags"] for ref in self.history_error_refs):
+            raise DockerError(500, {"message": "history no disponible"})
+        return self.histories.get(name, [])
+
+    async def delete(self, name: str, *, force: bool = False, noprune: bool = False):
+        detail = self._resolve(name)
+        if detail is None:
+            raise DockerError(404, {"message": f"No such image: {name}"})
+        in_use = False
+        for entry in self.list_payload:
+            if entry["Id"] == detail["Id"]:
+                in_use = entry.get("Containers", 0) > 0
+        if in_use and not force:
+            raise DockerError(
+                409,
+                {"message": f"conflict: unable to delete {name} (must be forced) - image is being used by running container"},
+            )
+        return [{"Untagged": detail["RepoTags"][1:]}] if len(detail["RepoTags"]) > 1 else []
+
+    def _progress_events(self, ref: str) -> list:
+        """Eventos con la misma forma que emite el daemon real (verificado)."""
+        return [
+            {"status": f"Pulling from library/{ref.split(':')[0]}", "id": ref.split(":")[-1]},
+            {"status": "Pulling fs layer", "progressDetail": {}, "id": "4f55086f7dd0"},
+            {
+                "status": "Downloading",
+                "progressDetail": {"current": 1024, "total": 4096},
+                "id": "4f55086f7dd0",
+            },
+            {"status": "Download complete", "progressDetail": {}, "id": "4f55086f7dd0"},
+            {"status": "Extracting", "progressDetail": {"current": 4096, "total": 4096}, "id": "4f55086f7dd0"},
+            {"status": "Pull complete", "progressDetail": {}, "id": "4f55086f7dd0"},
+            {"status": "Digest: sha256:5e23090353324d887c48ad5e5c56d294eab81588df9605b07d1afe895f9cc8f8"},
+            {"status": f"Status: Downloaded newer image for {ref}"},
+        ]
+
+    def pull(
+        self,
+        from_image: str,
+        *,
+        tag: str | None = None,
+        repo: str | None = None,
+        platform: str | None = None,
+        auth=None,
+        stream: bool = False,
+        timeout=None,
+    ):
+        ref = from_image if not tag else f"{from_image}:{tag}"
+        base = ref.split(":")[0]
+
+        # El error emerge durante la iteración, igual que con aiodocker real
+        async def _stream():
+            if base in self.unknown_refs:
+                raise DockerError(
+                    404,
+                    {
+                        "message": f"pull access denied for {base}, repository does not exist or may require 'docker login'"
+                    },
+                )
+            for event in self._progress_events(ref):
+                yield event
+
+        if stream:
+            return _stream()
+        return _collect(_stream())
+
+
+async def _collect(agen):
+    return [event async for event in agen]
+
+
 @pytest.fixture
 def mock_docker():
     mock = MagicMock()
@@ -275,14 +474,8 @@ def mock_docker():
     mock.containers.create = AsyncMock(side_effect=fake_create)
     mock.containers_db = containers_db
 
-    # Setup mock images repository
-    mock_local_images = [
-        {"Id": "sha256:img1", "RepoTags": ["nginx:alpine", "nginx:latest"], "Size": 25000000, "Created": 1727290000},
-        {"Id": "sha256:img2", "RepoTags": ["redis:alpine"], "Size": 35000000, "Created": 1727280000},
-    ]
-
-    async def fake_images_list():
-        return mock_local_images
+    # Setup mock images repository (doble con semántica de daemon, SPEC-07)
+    fake_images = FakeDockerImages()
 
     async def fake_query_json(endpoint: str, method: str = "GET", params: dict = None):
         if endpoint == "images/search":
@@ -293,10 +486,7 @@ def mock_docker():
             ]
         return []
 
-    mock.images = MagicMock()
-    mock.images.list = AsyncMock(side_effect=fake_images_list)
-    mock.images.pull = AsyncMock(return_value=[{"status": "Download complete"}])
-    mock.images.inspect = AsyncMock(return_value={"Id": "sha256:mock"})
+    mock.images = fake_images
     mock._query_json = AsyncMock(side_effect=fake_query_json)
     mock.close = AsyncMock()
     return mock

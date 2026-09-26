@@ -2,14 +2,33 @@ import type {
   ContainerSummary,
   ContainerDetail,
   ContainerActionResponse,
-  ImageSearchResult,
-  LocalImageSummary,
   CreateContainerRequest,
   CreateContainerResponse,
 } from '../types/docker'
 import type { ContainerStats } from '../types/stats'
+import type {
+  ImageDeleteResponse,
+  ImageDetail,
+  ImageSearchResult,
+  LocalImageSummary,
+} from '../types/image'
 
 const BASE_URL = '/api/v1'
+
+/**
+ * Patrón de referencia de imagen replicado del backend (SPEC-07 §3.2).
+ * Se mantiene en cliente para dar feedback inmediato sin往返 al servidor.
+ */
+const IMAGE_REF_PATTERN =
+  /^[a-zA-Z0-9][a-zA-Z0-9._-]*(?::\d+)?(?:\/[a-zA-Z0-9_][a-zA-Z0-9._-]*)*(?::[a-zA-Z0-9._-]+)?(?:@sha256:[a-f0-9]{64})?$/
+
+const MAX_IMAGE_REF_LENGTH = 255
+
+export function isValidImageRef(ref: string): boolean {
+  const candidate = (ref ?? '').trim()
+  if (!candidate || candidate.length > MAX_IMAGE_REF_LENGTH) return false
+  return IMAGE_REF_PATTERN.test(candidate)
+}
 
 async function handleResponse<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -101,6 +120,16 @@ export const dockerApi = {
   async getLocalImages(): Promise<LocalImageSummary[]> {
     const res = await fetch(`${BASE_URL}/images/local`)
     return handleResponse<LocalImageSummary[]>(res)
+  },
+
+  async getImage(id: string): Promise<ImageDetail> {
+    const res = await fetch(`${BASE_URL}/images/${id}`)
+    return handleResponse<ImageDetail>(res)
+  },
+
+  async deleteImage(id: string, force: boolean = false): Promise<ImageDeleteResponse> {
+    const res = await fetch(`${BASE_URL}/images/${id}?force=${force}`, { method: 'DELETE' })
+    return handleResponse<ImageDeleteResponse>(res)
   },
 
   async searchImages(term: string, limit: number = 10): Promise<ImageSearchResult[]> {

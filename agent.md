@@ -78,14 +78,15 @@ dockpilot/
 │   ├── 03-create-container.md  # Spec: Alta de contenedores e imágenes
 │   ├── 04-realtime-stats.md    # Spec: Métricas en vivo (CPU, RAM, Red, Disco)
 │   ├── 05-terminal.md          # Spec: Terminal interactiva con xterm.js
-│   └── 06-theme-switcher.md    # Spec: Temas claro, oscuro y del sistema
+│   ├── 06-theme-switcher.md    # Spec: Temas claro, oscuro y del sistema
+│   └── 07-images-management.md  # Spec: Gestión de imágenes (pull, inspect, delete)
 ├── backend/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── v1/
 │   │   │   │   ├── containers.py   # REST de contenedores + /{id}/stats
-│   │   │   │   ├── images.py       # REST de imágenes locales y búsqueda
-│   │   │   │   └── ws.py           # WebSocket: /logs, /stats, /terminal
+│   │   │   │   ├── images.py       # REST de imágenes: local, search, detalle, borrado
+│   │   │   │   └── ws.py           # WebSocket: /logs, /stats, /terminal, /images/pull
 │   │   │   └── router.py
 │   │   ├── core/
 │   │   │   ├── config.py
@@ -105,6 +106,8 @@ dockpilot/
 │   │   ├── conftest.py            # Fakes de aiodocker (contenedores, exec, stats)
 │   │   ├── test_containers.py
 │   │   ├── test_create_container.py
+│   │   ├── test_image_reference.py
+│   │   ├── test_images.py
 │   │   ├── test_images_search.py
 │   │   ├── test_stats.py
 │   │   ├── test_ws_logs.py
@@ -121,10 +124,10 @@ dockpilot/
 │   │   │   ├── terminal/          # TerminalModal, TerminalViewer, temas de xterm
 │   │   │   ├── logs/              # LogsModal, LogsViewer
 │   │   │   ├── stats/             # StatsModal, StatsSparkline
-│   │   │   └── images/
-│   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats, useTheme
+│   │   │   └── images/            # ImagesView, ImagesTable, PullImageModal, ImageDetailModal
+│   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats, useTheme, useImagePull
 │   │   ├── services/              # dockerApi.ts
-│   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts
+│   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts
 │   │   ├── utils/                 # format.ts (formatBytes, formatPercent)
 │   │   ├── App.tsx
 │   │   ├── main.tsx

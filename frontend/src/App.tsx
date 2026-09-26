@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Search, AlertCircle, RefreshCw } from 'lucide-react'
+import { Search, AlertCircle, RefreshCw, Container, Layers } from 'lucide-react'
 import { useContainers } from './hooks/useContainers'
 import type { ContainerSummary } from './types/docker'
 import { Navbar } from './components/layout/Navbar'
@@ -10,6 +10,8 @@ import { LogsModal } from './components/logs/LogsModal'
 import { StatsModal } from './components/stats/StatsModal'
 import { CreateContainerModal } from './components/containers/CreateContainerModal'
 import { TerminalModal } from './components/terminal/TerminalModal'
+import { ImagesView } from './components/images/ImagesView'
+import type { LocalImageSummary } from './types/image'
 
 function App() {
   const {
@@ -32,6 +34,8 @@ function App() {
   const [containerForStats, setContainerForStats] = useState<ContainerSummary | null>(null)
   const [containerForTerminal, setContainerForTerminal] = useState<ContainerSummary | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false)
+  const [activeView, setActiveView] = useState<'containers' | 'images'>('containers')
+  const [presetImage, setPresetImage] = useState<string>('')
 
   const runningCount = rawContainers.filter((c) => c.status.toLowerCase() === 'running').length
   const exitedCount = rawContainers.filter((c) => c.status.toLowerCase() === 'exited').length
@@ -69,47 +73,86 @@ function App() {
           </div>
         )}
 
-        {/* Toolbar: Filtros y Búsqueda */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          {/* Pills de Filtrado */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
-            {filterOptions.map((opt) => {
-              const active = statusFilter === opt.value
-              return (
-                <button
-                  key={opt.value}
-                  onClick={() => setStatusFilter(opt.value)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all flex items-center gap-2 shrink-0 ${
-                    active
-                      ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
-                      : 'bg-surface text-fg-muted hover:text-fg hover:bg-fg/10 border border-default/80'
-                  }`}
-                >
-                  <span>{opt.label}</span>
-                  <span
-                    className={`px-1.5 py-0.2 rounded-full text-[10px] ${
-                      active ? 'bg-blue-700 text-blue-100' : 'bg-elevated text-fg-muted'
+        {/* Conmutador de vista Contenedores / Imágenes */}
+        <div className="flex items-center gap-1 p-1 bg-surface rounded-xl border border-default w-fit">
+          {(
+            [
+              { key: 'containers', label: 'Contenedores', icon: Container },
+              { key: 'images', label: 'Imágenes', icon: Layers },
+            ] as const
+          ).map((view) => {
+            const Icon = view.icon
+            const active = activeView === view.key
+            return (
+              <button
+                key={view.key}
+                onClick={() => setActiveView(view.key)}
+                aria-pressed={active}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+                  active
+                    ? 'bg-elevated text-fg shadow-sm'
+                    : 'text-fg-muted hover:text-fg'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                <span>{view.label}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        {activeView === 'images' ? (
+          <ImagesView
+            onRunImage={(image: LocalImageSummary) => {
+              setPresetImage(image.tags[0] ?? image.id)
+              setIsCreateModalOpen(true)
+            }}
+            onDeleted={refetch}
+          />
+        ) : (
+          <>
+        {/* Toolbar de contenedores: filtros por estado y búsqueda.
+            Solo tiene sentido en esta pestaña: en Imágenes no aplicaría. */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            {/* Pills de Filtrado */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+              {filterOptions.map((opt) => {
+                const active = statusFilter === opt.value
+                return (
+                  <button
+                    key={opt.value}
+                    onClick={() => setStatusFilter(opt.value)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all flex items-center gap-2 shrink-0 ${
+                      active
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
+                        : 'bg-surface text-fg-muted hover:text-fg hover:bg-fg/10 border border-default/80'
                     }`}
                   >
-                    {opt.count}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
+                    <span>{opt.label}</span>
+                    <span
+                      className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                        active ? 'bg-blue-700 text-blue-100' : 'bg-elevated text-fg-muted'
+                      }`}
+                    >
+                      {opt.count}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
 
-          {/* Barra de Búsqueda */}
-          <div className="relative w-full sm:w-72">
-            <Search className="w-4 h-4 text-fg-muted absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              placeholder="Buscar por nombre, imagen o ID..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-9 pr-4 py-1.5 text-xs bg-surface border border-default rounded-xl text-fg placeholder-fg-muted focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 transition-all"
-            />
+            {/* Barra de Búsqueda */}
+            <div className="relative w-full sm:w-72">
+              <Search className="w-4 h-4 text-fg-muted absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Buscar por nombre, imagen o ID..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-4 py-1.5 text-xs bg-surface border border-default rounded-xl text-fg placeholder-fg-muted focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 transition-all"
+              />
+            </div>
           </div>
-        </div>
 
         {/* Tabla de Contenedores */}
         <ContainersTable
@@ -123,6 +166,8 @@ function App() {
           onOpenTerminal={(c) => setContainerForTerminal(c)}
           onRequestDelete={(c) => setContainerToDelete(c)}
         />
+          </>
+        )}
       </main>
 
       {/* Modal de Detalle */}
@@ -154,7 +199,11 @@ function App() {
       {/* Modal de Creación de Contenedor */}
       <CreateContainerModal
         isOpen={isCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
+        initialImage={presetImage}
+        onClose={() => {
+          setIsCreateModalOpen(false)
+          setPresetImage('')
+        }}
         onSuccess={refetch}
       />
 

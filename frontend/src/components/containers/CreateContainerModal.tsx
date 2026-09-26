@@ -13,14 +13,17 @@ interface CreateContainerModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess: () => void
+  /** Referencia de imagen preseleccionada (SPEC-07: acción "Ejecutar" del inventario). */
+  initialImage?: string
 }
 
 export const CreateContainerModal: React.FC<CreateContainerModalProps> = ({
   isOpen,
   onClose,
   onSuccess,
+  initialImage,
 }) => {
-  const [image, setImage] = useState<string>('')
+  const [image, setImage] = useState<string>(initialImage ?? '')
   const [name, setName] = useState<string>('')
   const [command, setCommand] = useState<string>('')
   const [restartPolicy, setRestartPolicy] = useState<'no' | 'always' | 'unless-stopped' | 'on-failure'>('no')
@@ -34,6 +37,11 @@ export const CreateContainerModal: React.FC<CreateContainerModalProps> = ({
   // Estado de carga y error
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Preseleccionar la imagen cuando se abre el modal con una referencia
+  useEffect(() => {
+    if (isOpen && initialImage) setImage(initialImage)
+  }, [isOpen, initialImage])
 
   // Cerrar al pulsar Escape
   useEffect(() => {

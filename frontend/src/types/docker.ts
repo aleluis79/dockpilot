@@ -32,20 +32,6 @@ export interface ContainerActionResponse {
   message: string;
 }
 
-export interface ImageSearchResult {
-  name: string;
-  description: string;
-  is_official: boolean;
-  star_count: number;
-}
-
-export interface LocalImageSummary {
-  id: string;
-  tags: string[];
-  size: number;
-  created: number;
-}
-
 export interface PortBindingConfig {
   host_port: number;
   container_port: number;
