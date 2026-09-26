@@ -50,13 +50,33 @@ const images = [
   },
 ]
 
+const systemOverview = {
+  info: {
+    server_version: '29.8.1', os_name: 'Debian', os_type: 'linux', architecture: 'x86_64',
+    kernel_version: '6.12.0', hostname: 'test', ncpu: 12, memory_total: 32827215872,
+    storage_driver: 'overlayfs', docker_root_dir: '/var/lib/docker', containers_total: 1,
+    containers_running: 1, containers_stopped: 0, containers_paused: 0, images_total: 1,
+  },
+  usage: {
+    layers_size: 0,
+    images: { total_count: 1, active_count: 1, total_size: 25000000, reclaimable: 0 },
+    containers: { total_count: 1, active_count: 1, total_size: 0, reclaimable: 0 },
+    volumes: { total_count: 0, active_count: 0, total_size: 0, reclaimable: 0 },
+    build_cache_size: 0,
+  },
+  top_images: [],
+  top_volumes: [],
+}
+
 const stubFetch = () => {
   const fetchMock = vi.fn(async (url: string) => {
     const body = String(url).includes('/images/local')
       ? images
       : String(url).includes('/containers')
         ? containers
-        : []
+        : String(url).includes('/system/overview')
+          ? systemOverview
+          : []
     return { ok: true, status: 200, json: async () => body } as unknown as Response
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -75,6 +95,25 @@ describe('App · conmutador de vista', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('acota la franja de resumen al mismo ancho que el contenido', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+
+    // La barra y el contenido deben compartir la columna centrada; si la barra
+    // queda fuera, ocupa todo el ancho de la pagina y desentona.
+    const barra = await screen.findByTestId('system-summary')
+    const contenedor = barra.parentElement as HTMLElement
+    const main = document.querySelector('main') as HTMLElement
+
+    for (const clase of ['max-w-7xl', 'mx-auto', 'w-full']) {
+      expect(contenedor.className).toContain(clase)
+      expect(main.className).toContain(clase)
+    }
   })
 
   it('muestra los filtros y el buscador en la pestaña de contenedores', async () => {

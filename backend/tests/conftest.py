@@ -7,6 +7,7 @@ from aiodocker.exceptions import DockerError
 
 from app.main import app
 from app.core.docker import get_docker
+from tests.fake_volumes import FakeDockerVolumes
 
 
 class FakeExecStream:
@@ -60,13 +61,30 @@ class FakeExec:
 
 
 class FakeDockerContainer:
-    def __init__(self, cid: str, name: str, image: str, status: str, state: str, ports: list = None):
+    def __init__(
+        self,
+        cid: str,
+        name: str,
+        image: str,
+        status: str,
+        state: str,
+        ports: list = None,
+        mounts: list = None,
+        networks: dict = None,
+    ):
         self.id = cid
         self._name = name
         self._image = image
         self._status = status
         self._state = state
         self._ports = ports or []
+        # Montajes de tipo volumen: es la unica fuente de que contenedor usa
+        # que volumen, porque /volumes/{name} NO incluye campo Containers.
+        self._mounts = mounts or []
+        # Redes a las que esta conectado. Es la unica fuente para saber que
+        # contenedor usa que red: `networks.list()` no trae ningun recuento
+        # (SPEC-10 §3.1).
+        self._networks = networks or {}
 
     def _as_summary_dict(self):
         return {
@@ -77,6 +95,8 @@ class FakeDockerContainer:
             "Status": f"Up 2 hours ({self._status})" if self._status == "running" else f"Exited ({self._status})",
             "Created": 1727290000,
             "Ports": self._ports,
+            "Mounts": self._mounts,
+            "NetworkSettings": {"Networks": self._networks},
         }
 
     async def show(self):
@@ -401,6 +421,190 @@ class FakeDockerImages:
         return _collect(_stream())
 
 
+class FakeDockerNetwork:
+    """Devuelto por `await networks.get(nombre)`; imita a `DockerNetwork`."""
+
+    def __init__(self, payload: dict, owner: "FakeDockerNetworks"):
+        self._payload = payload
+        self._owner = owner
+
+    async def show(self) -> dict:
+        if self._payload["Name"] not in self._owner.networks:
+            raise DockerError(404, {"message": "network not found"})
+        return self._owner.show_payload(self._payload["Name"])
+
+    async def delete(self) -> bool:
+        return self._owner.delete(self._payload["Name"])
+
+
+class FakeDockerNetworks:
+    """Doble de `aiodocker.DockerNetworks` con la semántica observada en el daemon real.
+
+    Detalles de fidelidad relevantes para SPEC-10:
+    - `list()` devuelve una **lista de dicts** (a diferencia de `volumes.list()`,
+      que devuelve un dict) y **sin ningun campo `Containers` ni recuento**.
+    - `get()` es una **corrutina**: hay que hacer `await` antes de encadenar.
+    - No hay `delete` en el nivel de `DockerNetworks`; se borra via `get().delete()`.
+    - `DockerNetwork.delete()` **no admite parametros**: no hay forma de pedir `force`.
+    - `IPAM.Config` es `null` en `none` y `host`, y una lista de dicts en el resto.
+    """
+
+    BUILTIN = ("none", "host", "bridge")
+
+    def __init__(self):
+        self.networks = {
+            "bridge": {
+                "Name": "bridge", "Id": "net-bridge", "Created": "2026-06-07T09:34:28.089537938-03:00",
+                "Scope": "local", "Driver": "bridge", "EnableIPv4": True, "EnableIPv6": False,
+                "IPAM": {"Driver": "default", "Options": None,
+                         "Config": [{"Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1"}]},
+                "Internal": False, "Attachable": False, "Ingress": False,
+                "ConfigFrom": {"Network": ""}, "ConfigOnly": False,
+                "Options": {}, "Labels": {},
+            },
+            "host": {
+                "Name": "host", "Id": "net-host", "Created": "2026-06-07T09:34:28.089537938-03:00",
+                "Scope": "local", "Driver": "host", "EnableIPv4": True, "EnableIPv6": False,
+                "IPAM": {"Driver": "default", "Options": None, "Config": None},
+                "Internal": False, "Attachable": False, "Ingress": False,
+                "ConfigFrom": {"Network": ""}, "ConfigOnly": False,
+                "Options": {}, "Labels": {},
+            },
+            "none": {
+                "Name": "none", "Id": "net-none", "Created": "2026-06-07T09:34:28.089537938-03:00",
+                "Scope": "local", "Driver": None, "EnableIPv4": True, "EnableIPv6": False,
+                "IPAM": {"Driver": "default", "Options": None, "Config": None},
+                "Internal": False, "Attachable": False, "Ingress": False,
+                "ConfigFrom": {"Network": ""}, "ConfigOnly": False,
+                "Options": {}, "Labels": {},
+            },
+            "app-net": {
+                "Name": "app-net", "Id": "net-app", "Created": "2026-07-01T10:00:00.000000000-03:00",
+                "Scope": "local", "Driver": "bridge", "EnableIPv4": True, "EnableIPv6": False,
+                "IPAM": {"Driver": "default", "Options": None,
+                         "Config": [{"Subnet": "172.18.0.0/16", "Gateway": "172.18.0.1"}]},
+                "Internal": False, "Attachable": True, "Ingress": False,
+                "ConfigFrom": {"Network": ""}, "ConfigOnly": False,
+                "Options": {"com.docker.network.bridge.default_bridge": "true"},
+                "Labels": {"com.docker.compose.project": "app"},
+            },
+            "huerfana": {
+                "Name": "huerfana", "Id": "net-huerfana", "Created": "2026-08-15T18:20:00.000000000-03:00",
+                "Scope": "local", "Driver": "bridge", "EnableIPv4": True, "EnableIPv6": False,
+                "IPAM": {"Driver": "default", "Options": None,
+                         "Config": [{"Subnet": "172.19.0.0/16", "Gateway": "172.19.0.1"}]},
+                "Internal": True, "Attachable": False, "Ingress": False,
+                "ConfigFrom": {"Network": ""}, "ConfigOnly": False,
+                "Options": {}, "Labels": {},
+            },
+        }
+        # Contenedores por red, para que show() sepa a quienNombrar
+        self.connected = {
+            "bridge": {"c123": "web-app"},
+            "app-net": {"c123": "web-app"},
+        }
+        self.create_error = None
+        self.create_calls = []
+
+    async def list(self, **kwargs) -> list:
+        # Devuelve una copia superficial: el codigo de produccion no debe poder
+        # mutar el estado del doble a traves de la respuesta.
+        return [dict(item) for item in self.networks.values()]
+
+    async def get(self, name: str) -> FakeDockerNetwork:
+        if name not in self.networks:
+            raise DockerError(404, {"message": "network not found"})
+        return FakeDockerNetwork(self.networks[name], self)
+
+    async def create(self, config: dict) -> FakeDockerNetwork:
+        if self.create_error is not None:
+            raise self.create_error
+        self.create_calls.append(config)
+        name = config["Name"]
+        if name in self.networks:
+            raise DockerError(409, {"message": f"network with name {name} already exists"})
+        subnet = (config.get("IPAM") or {}).get("Config") or [{}]
+        self.networks[name] = {
+            "Name": name, "Id": f"net-{name}", "Created": "2026-09-26T12:00:00.000000000-03:00",
+            "Scope": "local", "Driver": config.get("Driver", "bridge"),
+            "EnableIPv4": True, "EnableIPv6": False,
+            "IPAM": {"Driver": "default", "Options": None,
+                     "Config": [{"Subnet": subnet[0].get("Subnet", ""),
+                                 "Gateway": subnet[0].get("Gateway", "")}]},
+            "Internal": bool(config.get("Internal")),
+            "Attachable": False, "Ingress": False,
+            "ConfigFrom": {"Network": ""}, "ConfigOnly": False,
+            "Options": {}, "Labels": config.get("Labels") or {},
+        }
+        self.connected.setdefault(name, {})
+        return FakeDockerNetwork(self.networks[name], self)
+
+    async def prune(self, *, filters=None) -> dict:
+        deleted = []
+        for name in list(self.networks):
+            if name in self.BUILTIN:
+                continue
+            if self.connected.get(name):
+                continue
+            del self.networks[name]
+            self.connected.pop(name, None)
+            deleted.append(name)
+        return {"NetworksDeleted": deleted}
+
+    def show_payload(self, name: str) -> dict:
+        payload = dict(self.networks[name])
+        payload["Containers"] = {
+            cid: {
+                "Name": name_c,
+                "EndpointID": f"ep-{cid}",
+                "MacAddress": "02:42:ac:11:00:02",
+                "IPv4Address": "172.18.0.2/16",
+                "IPv6Address": "",
+            }
+            for cid, name_c in (self.connected.get(name) or {}).items()
+        }
+        payload["Status"] = {"IPAM": {}}
+        return payload
+
+    def delete(self, name: str) -> bool:
+        if name in self.BUILTIN:
+            raise DockerError(403, {"message": "network is predefined and cannot be removed"})
+        if self.connected.get(name):
+            raise DockerError(409, {"message": "network has active endpoints"})
+        del self.networks[name]
+        self.connected.pop(name, None)
+        return True
+
+
+class FakeDockerSystem:
+    """Doble de `docker.system`, que solo expone `info()`."""
+
+    def __init__(self):
+        self.error = None
+
+    async def info(self):
+        if self.error is not None:
+            raise self.error
+        return {
+            "ID": "XVSR:QMVO:GH7L:6N2D:KLOM:5YHZ:EQ5A:F2UX:RS5U:3ZQ7",
+            "Containers": 2,
+            "ContainersRunning": 1,
+            "ContainersPaused": 0,
+            "ContainersStopped": 1,
+            "Images": 2,
+            "Driver": "overlayfs",
+            "DockerRootDir": "/var/lib/docker",
+            "Name": "dockpilot-test",
+            "ServerVersion": "29.8.1",
+            "OperatingSystem": "Debian GNU/Linux 13 (trixie)",
+            "OSType": "linux",
+            "Architecture": "x86_64",
+            "NCPU": 12,
+            "MemTotal": 32827215872,
+            "KernelVersion": "6.12.0",
+        }
+
+
 async def _collect(agen):
     return [event async for event in agen]
 
@@ -417,6 +621,19 @@ def mock_docker():
         status="running",
         state="running",
         ports=[{"IP": "0.0.0.0", "PrivatePort": 80, "PublicPort": 8080, "Type": "tcp"}],
+        mounts=[
+            {
+                "Type": "volume",
+                "Name": "datos-app",
+                "Source": "/var/lib/docker/volumes/datos-app/_data",
+                "Destination": "/var/lib/postgresql/data",
+                "RW": True,
+            }
+        ],
+        networks={
+            "bridge": {"IPAddress": "172.17.0.2", "Gateway": "172.17.0.1"},
+            "app-net": {"IPAddress": "172.18.0.2", "Gateway": "172.18.0.1"},
+        },
     )
     c_exited = FakeDockerContainer(
         cid="c456",
@@ -477,6 +694,9 @@ def mock_docker():
     # Setup mock images repository (doble con semántica de daemon, SPEC-07)
     fake_images = FakeDockerImages()
 
+    # Setup mock volumes repository (doble con semántica de aiodocker, SPEC-08)
+    fake_volumes = FakeDockerVolumes()
+
     async def fake_query_json(endpoint: str, method: str = "GET", params: dict = None):
         if endpoint == "images/search":
             term = (params or {}).get("term", "")
@@ -484,9 +704,79 @@ def mock_docker():
                 {"name": f"{term}", "description": f"Official {term} image", "is_official": True, "star_count": 15000},
                 {"name": f"bitnami/{term}", "description": f"Bitnami {term}", "is_official": False, "star_count": 1200},
             ]
+        if endpoint == "system/df":
+            # /system/df: el tamaño de cada volumen vive bajo UsageData (SPEC-08 §3.1)
+            return {
+                "LayersSize": 5106255209,
+                "Images": [],
+                "Containers": [],
+                "Volumes": [],
+                "BuildCache": [],
+                "BuildCacheUsage": 123456789,
+                "ImageUsage": {
+                    "TotalCount": 2,
+                    "ActiveCount": 1,
+                    "TotalSize": 5106255209,
+                    "Reclaimable": 4223809473,
+                    "Items": [
+                        {
+                            "Id": "sha256:aaa111",
+                            "Names": ["postgres:16-alpine"],
+                            "Size": 883261440,
+                            "SharedSize": 0,
+                            "Containers": 1,
+                        },
+                        {
+                            "Id": "sha256:bbb222",
+                            "Names": ["tmp/builder-leftover:latest"],
+                            "Size": 4222993769,
+                            "SharedSize": 0,
+                            "Containers": 0,
+                        },
+                    ],
+                },
+                "ContainerUsage": {
+                    "TotalCount": 2,
+                    "ActiveCount": 1,
+                    "TotalSize": 106496,
+                    "Reclaimable": 24576,
+                    "Items": [
+                        {
+                            "Id": "c123000000001",
+                            "Names": ["web-app"],
+                            "Size": 90112,
+                            "SharedSize": 0,
+                        },
+                        {
+                            "Id": "c456000000002",
+                            "Names": ["web-app-cache"],
+                            "Size": 16384,
+                            "SharedSize": 0,
+                        },
+                    ],
+                },
+                "VolumeUsage": {
+                    "TotalCount": len(fake_volumes.list_payload["Volumes"]),
+                    "ActiveCount": 1,
+                    "TotalSize": 158478691,
+                    "Reclaimable": 53747987,
+                    "Items": [
+                        {
+                            "Name": item["Name"],
+                            "UsageData": item["UsageData"],
+                        }
+                        for item in fake_volumes.usage_items
+                    ],
+                },
+            }
         return []
 
+    fake_system = FakeDockerSystem()
     mock.images = fake_images
+    mock.volumes = fake_volumes
+    fake_networks_obj = FakeDockerNetworks()
+    mock.networks = fake_networks_obj
+    mock.system = fake_system
     mock._query_json = AsyncMock(side_effect=fake_query_json)
     mock.close = AsyncMock()
     return mock

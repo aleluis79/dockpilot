@@ -12,17 +12,38 @@ import type {
   ImageSearchResult,
   LocalImageSummary,
 } from '../types/image'
+import type {
+  CreateNetworkRequest,
+  NetworkDeleteResponse,
+  NetworkDetail,
+  NetworkPruneResult,
+  NetworkSummary,
+} from '../types/network'
+import type { DiskUsage, SystemInfo, SystemOverview } from '../types/system'
+import type {
+  VolumeDeleteResponse,
+  VolumeDetail,
+  VolumePruneResult,
+  VolumeSummary,
+} from '../types/volume'
 
 const BASE_URL = '/api/v1'
 
 /**
  * Patrón de referencia de imagen replicado del backend (SPEC-07 §3.2).
- * Se mantiene en cliente para dar feedback inmediato sin往返 al servidor.
+ * Se mantiene en cliente para dar feedback inmediato sin ir al servidor.
  */
 const IMAGE_REF_PATTERN =
   /^[a-zA-Z0-9][a-zA-Z0-9._-]*(?::\d+)?(?:\/[a-zA-Z0-9_][a-zA-Z0-9._-]*)*(?::[a-zA-Z0-9._-]+)?(?:@sha256:[a-f0-9]{64})?$/
 
 const MAX_IMAGE_REF_LENGTH = 255
+
+/** Resumen previo a la limpieza, para poder confirmar con cifras (SPEC-08 §3.4). */
+export interface UnusedVolumesSummary {
+  count: number
+  bytes: number
+  names: string[]
+}
 
 export function isValidImageRef(ref: string): boolean {
   const candidate = (ref ?? '').trim()
@@ -115,6 +136,85 @@ export const dockerApi = {
   async getContainerStats(id: string): Promise<ContainerStats> {
     const res = await fetch(`${BASE_URL}/containers/${id}/stats`)
     return handleResponse<ContainerStats>(res)
+  },
+
+  async getVolumes(): Promise<VolumeSummary[]> {
+    const res = await fetch(`${BASE_URL}/volumes`)
+    return handleResponse<VolumeSummary[]>(res)
+  },
+
+  async getVolume(name: string): Promise<VolumeDetail> {
+    const res = await fetch(`${BASE_URL}/volumes/${encodeURIComponent(name)}`)
+    return handleResponse<VolumeDetail>(res)
+  },
+
+  /**
+   * Vista completa del host en una sola peticion: informacion del sistema,
+   * consumo de disco y mayores consumidores (SPEC-09).
+   */
+  async getSystemOverview(): Promise<SystemOverview> {
+    const res = await fetch(`${BASE_URL}/system/overview`)
+    return handleResponse<SystemOverview>(res)
+  },
+
+  async getSystemInfo(): Promise<SystemInfo> {
+    const res = await fetch(`${BASE_URL}/system/info`)
+    return handleResponse<SystemInfo>(res)
+  },
+
+  async getDiskUsage(): Promise<DiskUsage> {
+    const res = await fetch(`${BASE_URL}/system/df`)
+    return handleResponse<DiskUsage>(res)
+  },
+
+  async listNetworks(): Promise<NetworkSummary[]> {
+    const res = await fetch(`${BASE_URL}/networks`)
+    return handleResponse<NetworkSummary[]>(res)
+  },
+
+  async getNetwork(name: string): Promise<NetworkDetail> {
+    const res = await fetch(`${BASE_URL}/networks/${encodeURIComponent(name)}`)
+    return handleResponse<NetworkDetail>(res)
+  },
+
+  async createNetwork(payload: CreateNetworkRequest): Promise<NetworkDetail> {
+    const res = await fetch(`${BASE_URL}/networks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    return handleResponse<NetworkDetail>(res)
+  },
+
+  async deleteNetwork(name: string, force = false): Promise<NetworkDeleteResponse> {
+    const res = await fetch(
+      `${BASE_URL}/networks/${encodeURIComponent(name)}?force=${force}`,
+      { method: 'DELETE' }
+    )
+    return handleResponse<NetworkDeleteResponse>(res)
+  },
+
+  async pruneNetworks(): Promise<NetworkPruneResult> {
+    const res = await fetch(`${BASE_URL}/networks/prune`, { method: 'POST' })
+    return handleResponse<NetworkPruneResult>(res)
+  },
+
+  async getUnusedVolumesSummary(): Promise<UnusedVolumesSummary> {
+    const res = await fetch(`${BASE_URL}/volumes/prune`)
+    return handleResponse<UnusedVolumesSummary>(res)
+  },
+
+  async pruneVolumes(): Promise<VolumePruneResult> {
+    const res = await fetch(`${BASE_URL}/volumes/prune`, { method: 'POST' })
+    return handleResponse<VolumePruneResult>(res)
+  },
+
+  async deleteVolume(name: string, force: boolean = false): Promise<VolumeDeleteResponse> {
+    const res = await fetch(
+      `${BASE_URL}/volumes/${encodeURIComponent(name)}?force=${force}`,
+      { method: 'DELETE' }
+    )
+    return handleResponse<VolumeDeleteResponse>(res)
   },
 
   async getLocalImages(): Promise<LocalImageSummary[]> {

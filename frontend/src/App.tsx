@@ -1,5 +1,13 @@
 import { useState } from 'react'
-import { Search, AlertCircle, RefreshCw, Container, Layers } from 'lucide-react'
+import {
+  Search,
+  AlertCircle,
+  RefreshCw,
+  Container,
+  Layers,
+  HardDrive,
+  Network,
+} from 'lucide-react'
 import { useContainers } from './hooks/useContainers'
 import type { ContainerSummary } from './types/docker'
 import { Navbar } from './components/layout/Navbar'
@@ -11,6 +19,9 @@ import { StatsModal } from './components/stats/StatsModal'
 import { CreateContainerModal } from './components/containers/CreateContainerModal'
 import { TerminalModal } from './components/terminal/TerminalModal'
 import { ImagesView } from './components/images/ImagesView'
+import { VolumesView } from './components/volumes/VolumesView'
+import { NetworksView } from './components/networks/NetworksView'
+import { SystemSummaryBar } from './components/system/SystemSummaryBar'
 import type { LocalImageSummary } from './types/image'
 
 function App() {
@@ -34,7 +45,9 @@ function App() {
   const [containerForStats, setContainerForStats] = useState<ContainerSummary | null>(null)
   const [containerForTerminal, setContainerForTerminal] = useState<ContainerSummary | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false)
-  const [activeView, setActiveView] = useState<'containers' | 'images'>('containers')
+  const [activeView, setActiveView] = useState<
+    'containers' | 'images' | 'volumes' | 'networks'
+  >('containers')
   const [presetImage, setPresetImage] = useState<string>('')
 
   const runningCount = rawContainers.filter((c) => c.status.toLowerCase() === 'running').length
@@ -54,6 +67,12 @@ function App() {
         loading={loading}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
       />
+
+      {/* La franja comparte la columna del contenido: si se deja fuera de
+          `main`, ocupa todo el ancho de la pagina y desentona con las tablas. */}
+      <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <SystemSummaryBar />
+      </div>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         {/* Banner de Error */}
@@ -79,6 +98,8 @@ function App() {
             [
               { key: 'containers', label: 'Contenedores', icon: Container },
               { key: 'images', label: 'Imágenes', icon: Layers },
+              { key: 'volumes', label: 'Volúmenes', icon: HardDrive },
+              { key: 'networks', label: 'Redes', icon: Network },
             ] as const
           ).map((view) => {
             const Icon = view.icon
@@ -101,7 +122,11 @@ function App() {
           })}
         </div>
 
-        {activeView === 'images' ? (
+        {activeView === 'volumes' ? (
+          <VolumesView onDeleted={refetch} />
+        ) : activeView === 'networks' ? (
+          <NetworksView />
+        ) : activeView === 'images' ? (
           <ImagesView
             onRunImage={(image: LocalImageSummary) => {
               setPresetImage(image.tags[0] ?? image.id)

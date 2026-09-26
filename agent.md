@@ -79,13 +79,20 @@ dockpilot/
 │   ├── 04-realtime-stats.md    # Spec: Métricas en vivo (CPU, RAM, Red, Disco)
 │   ├── 05-terminal.md          # Spec: Terminal interactiva con xterm.js
 │   ├── 06-theme-switcher.md    # Spec: Temas claro, oscuro y del sistema
-│   └── 07-images-management.md  # Spec: Gestión de imágenes (pull, inspect, delete)
+│   ├── 07-images-management.md  # Spec: Gestión de imágenes (pull, inspect, delete)
+│   ├── 08-volumes-management.md # Spec: Volúmenes (listado, detalle, prune)
+│   ├── 09-system-overview.md    # Spec: Resumen del host y consumo de disco
+│   └── 10-networks-management.md # Spec: Redes Docker (alta, detalle, prune)
 ├── backend/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── v1/
 │   │   │   │   ├── containers.py   # REST de contenedores + /{id}/stats
-│   │   │   │   ├── images.py       # REST de imágenes: local, search, detalle, borrado
+│   │   │   │   ├── images.py
+│   │   ├── network.py
+│   │   ├── networks.py
+│   │   ├── system.py       # REST de imágenes: local, search, detalle, borrado
+│   │   │   │   ├── volumes.py      # REST de volúmenes: listado, detalle, prune, borrado
 │   │   │   │   └── ws.py           # WebSocket: /logs, /stats, /terminal, /images/pull
 │   │   │   └── router.py
 │   │   ├── core/
@@ -94,22 +101,32 @@ dockpilot/
 │   │   ├── schemas/
 │   │   │   ├── container.py
 │   │   │   ├── image.py
+│   │   ├── system.py
 │   │   │   ├── log.py
 │   │   │   ├── stats.py
-│   │   │   └── terminal.py
+│   │   │   ├── terminal.py
+│   │   │   └── volume.py
 │   │   ├── services/
 │   │   │   ├── container_service.py
 │   │   │   ├── image_service.py
-│   │   │   └── stats_service.py
+│   │   │   ├── stats_service.py
+│   │   │   ├── network_service.py
+│   │   ├── system_service.py # Primitivo compartido /info y /system/df (SPEC-09)
+│   │   │   └── volume_service.py
 │   │   └── main.py
 │   ├── tests/
 │   │   ├── conftest.py            # Fakes de aiodocker (contenedores, exec, stats)
+│   │   ├── fake_volumes.py        # Doble de aiodocker.volumes (devuelve dict, no lista)
 │   │   ├── test_containers.py
 │   │   ├── test_create_container.py
 │   │   ├── test_image_reference.py
 │   │   ├── test_images.py
+│   ├── test_networks.py
+│   ├── test_system.py
 │   │   ├── test_images_search.py
 │   │   ├── test_stats.py
+│   │   ├── test_system_df.py
+│   │   ├── test_volumes.py
 │   │   ├── test_ws_logs.py
 │   │   └── test_ws_terminal.py
 │   ├── pyproject.toml             # Configuración de Ruff (target py312)
@@ -124,10 +141,11 @@ dockpilot/
 │   │   │   ├── terminal/          # TerminalModal, TerminalViewer, temas de xterm
 │   │   │   ├── logs/              # LogsModal, LogsViewer
 │   │   │   ├── stats/             # StatsModal, StatsSparkline
-│   │   │   └── images/            # ImagesView, ImagesTable, PullImageModal, ImageDetailModal
+│   │   │   ├── images/            # ImagesView, ImagesTable, PullImageModal, ImageDetailModal
+│   │   │   └── volumes/           # VolumesView, VolumesTable, VolumeDetailModal
 │   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats, useTheme, useImagePull
 │   │   ├── services/              # dockerApi.ts
-│   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts
+│   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts, volume.ts
 │   │   ├── utils/                 # format.ts (formatBytes, formatPercent)
 │   │   ├── App.tsx
 │   │   ├── main.tsx
