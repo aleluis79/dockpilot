@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Eraser, HardDrive, RefreshCw, Search, Trash2, X } from 'lucide-react'
 import { MODAL_OVERLAY } from '../ui/modalOverlay'

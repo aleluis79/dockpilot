@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React, { useState } from 'react'
 import { X, Network as NetworkIcon, Loader2, AlertCircle } from 'lucide-react'
 import { MODAL_OVERLAY } from '../ui/modalOverlay'

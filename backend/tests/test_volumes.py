@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Gestión de volúmenes: listado, detalle, borrado y limpieza (SPEC-08)."""
 
 import pytest

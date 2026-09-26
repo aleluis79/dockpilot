@@ -226,7 +226,7 @@ describe('NetworksView', () => {
     render(<NetworksView />)
 
     await waitFor(() => expect(screen.getByText('huerfana')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /limpiar sin uso/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^Limpiar no /i }))
 
     const dialogo = await screen.findByRole('dialog')
     // 3 redes - 2 en uso = 1 sin uso
@@ -239,7 +239,7 @@ describe('NetworksView', () => {
     render(<NetworksView />)
 
     await waitFor(() => expect(screen.getByText('app-net')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /crear red/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Nueva Red/ }))
 
     const dialogo = await screen.findByRole('dialog')
     fireEvent.change(within(dialogo).getByLabelText('Nombre de la red'), { target: { value: 'nueva' } })
@@ -264,7 +264,7 @@ describe('NetworksView', () => {
     await waitFor(() => expect(nombresVisibles()).toContain('app-net'))
     const antes = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/networks') && !(u as RequestInit)?.method).length
 
-    fireEvent.click(screen.getByRole('button', { name: /crear red/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Nueva Red/ }))
     const dialogo = await screen.findByRole('dialog')
     fireEvent.change(within(dialogo).getByLabelText('Nombre de la red'), { target: { value: 'nueva' } })
     fireEvent.click(within(dialogo).getByRole('button', { name: /^crear$/i }))
@@ -284,7 +284,7 @@ describe('NetworksView', () => {
     render(<NetworksView />)
 
     await waitFor(() => expect(screen.getByText('app-net')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: /crear red/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Nueva Red/ }))
 
     const dialogo = await screen.findByRole('dialog')
     expect(within(dialogo).getByText(/siguiente subred libre/i)).toBeInTheDocument()

@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ImageLayerState, ImagePullLayer, ImagePullMessage } from '../types/image'
+import { wsUrl } from '../services/wsUrl'
 
 type PullStatus = 'idle' | 'pulling' | 'success' | 'error'
 
@@ -69,14 +71,9 @@ export function useImagePull(
     setError(null)
     setErrorCode(null)
 
-    let wsUrl = `/ws/images/pull?image=${encodeURIComponent(imageRef)}`
-    if (typeof window !== 'undefined' && window.location) {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const host = window.location.host || '127.0.0.1:8000'
-      wsUrl = `${protocol}//${host}${wsUrl}`
-    }
+    const url = wsUrl(`/ws/images/pull?image=${encodeURIComponent(imageRef)}`)
 
-    const ws = new WebSocket(wsUrl)
+    const ws = new WebSocket(url)
     wsRef.current = ws
 
     ws.onmessage = (event) => {

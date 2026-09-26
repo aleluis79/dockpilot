@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Contratos de `/api/v1/networks` (SPEC-10)."""
 
 import pytest

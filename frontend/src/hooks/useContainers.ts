@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { dockerApi } from '../services/dockerApi'
 import type { ContainerSummary } from '../types/docker'

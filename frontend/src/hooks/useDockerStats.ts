@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { ContainerStats, StatsHistoryPoint } from '../types/stats'
+import { wsUrl } from '../services/wsUrl'
 
 interface UseDockerStatsOptions {
   maxHistory?: number
@@ -48,14 +50,9 @@ export function useDockerStats(
     }
 
     const connect = () => {
-      let wsUrl = `/ws/containers/${containerId}/stats`
-      if (typeof window !== 'undefined' && window.location) {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-        const host = window.location.host || '127.0.0.1:8000'
-        wsUrl = `${protocol}//${host}${wsUrl}`
-      }
+      const url = wsUrl(`/ws/containers/${containerId}/stats`)
 
-      const ws = new WebSocket(wsUrl)
+      const ws = new WebSocket(url)
       wsRef.current = ws
 
       ws.onopen = () => {

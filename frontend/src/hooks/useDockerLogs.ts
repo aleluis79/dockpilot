@@ -1,5 +1,7 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { LogEntry } from '../types/log'
+import { wsUrl } from '../services/wsUrl'
 
 interface UseDockerLogsOptions {
   tail?: number
@@ -29,14 +31,9 @@ export function useDockerLogs(
     let isMounted = true
 
     // Determinar URL de WebSocket
-    let wsUrl = `/ws/containers/${containerId}/logs?tail=${tail}&timestamps=${timestamps}&follow=true`
-    if (typeof window !== 'undefined' && window.location) {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const host = window.location.host || '127.0.0.1:8000'
-      wsUrl = `${protocol}//${host}${wsUrl}`
-    }
+    const url = wsUrl(`/ws/containers/${containerId}/logs?tail=${tail}&timestamps=${timestamps}&follow=true`)
 
-    const ws = new WebSocket(wsUrl)
+    const ws = new WebSocket(url)
     wsRef.current = ws
 
     ws.onopen = () => {

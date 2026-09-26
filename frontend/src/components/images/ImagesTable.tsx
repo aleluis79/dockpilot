@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React from 'react'
 import { Box, RefreshCw, AlertCircle, Play, Info, Trash2 } from 'lucide-react'
 import { formatBytes } from '../../utils/format'

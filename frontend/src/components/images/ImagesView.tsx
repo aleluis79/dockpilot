@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Box, Download, RefreshCw, AlertCircle, Layers, Search } from 'lucide-react'
 import { dockerApi } from '../../services/dockerApi'

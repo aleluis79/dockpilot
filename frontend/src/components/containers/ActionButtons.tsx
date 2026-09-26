@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React from 'react'
 import { Play, Square, RotateCw, Pause, PlayCircle, Trash2, Loader2, FileText, Terminal as TerminalIcon, Activity } from 'lucide-react'
 import type { ContainerSummary } from '../../types/docker'

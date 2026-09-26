@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React, { useState } from 'react'
 import {
   Search,
@@ -7,6 +8,7 @@ import {
   Loader2,
   Network as NetworkIcon,
   Broom,
+  Eraser,
 } from 'lucide-react'
 import { useNetworks } from '../../hooks/useNetworks'
 import { NetworksTable } from './NetworksTable'
@@ -77,26 +79,33 @@ export const NetworksView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Mismas clases que el boton de limpieza de volumenes: el patron
+              de aviso de limpieza es el mismo en toda la aplicacion.
+              `tests/components/pruneButton.test.tsx` lo fija. */}
           <button
             type="button"
             onClick={() => setPruneOpen(true)}
             disabled={counts.unused === 0 || actionInProgress === '__prune__'}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded border border-default text-fg hover:bg-elevated-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Limpiar redes no usadas"
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
           >
             {actionInProgress === '__prune__' ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              <Broom className="w-4 h-4" />
+              <Eraser className="w-4 h-4" />
             )}
-            Limpiar sin uso
+            <span>Limpiar no usadas</span>
           </button>
+          {/* Mismas clases que "Nuevo Contenedor" y "Descargar imagen": el
+              patron de accion principal ya estaba fijado en la aplicacion.
+              `tests/components/actionButtonStyles.test.tsx` lo vigila. */}
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded bg-accent text-white hover:opacity-90 transition-opacity"
+            className="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-medium transition-all shadow-lg shadow-blue-500/20 flex items-center gap-1.5 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            Crear red
+            <span>Nueva Red</span>
           </button>
         </div>
       </div>
@@ -148,14 +157,21 @@ export const NetworksView: React.FC = () => {
           )
         })}
 
-        <div className="relative ml-auto">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-fg-subtle" />
+        {/* Mismas clases que los buscadores de volumenes e imagenes, incluida
+            la etiqueta oculta para lectores de pantalla.
+            `tests/components/actionButtonStyles.test.tsx` lo vigila. */}
+        <div className="relative w-full sm:w-56 ml-auto">
+          <label htmlFor="networks-search" className="sr-only">
+            Buscar redes
+          </label>
+          <Search className="w-4 h-4 text-fg-muted absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
+            id="networks-search"
+            type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Buscar por nombre..."
-            aria-label="Buscar redes"
-            className="pl-8 pr-2.5 py-1 text-xs rounded bg-elevated text-fg border border-default focus:border-accent outline-none w-56"
+            className="w-full pl-9 pr-3 py-1.5 text-xs bg-surface border border-default rounded-xl text-fg placeholder-fg-muted focus:outline-none focus:border-blue-500/50 transition-all"
           />
         </div>
       </div>

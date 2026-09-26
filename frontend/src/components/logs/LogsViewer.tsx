@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React, { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Search,

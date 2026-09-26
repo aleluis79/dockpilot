@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import type { ITheme } from '@xterm/xterm'
 import type { ResolvedTheme } from '../../types/theme'
 

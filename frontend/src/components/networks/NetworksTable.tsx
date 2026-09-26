@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React from 'react'
 import { Trash2, Network as NetworkIcon, Loader2 } from 'lucide-react'
 import type { NetworkSummary } from '../../types/network'

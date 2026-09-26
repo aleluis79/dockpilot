@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { Server, Cpu, MemoryStick, HardDrive, Layers, Package, Box, Database } from 'lucide-react'
 import { useSystemOverview } from '../../hooks/useSystemOverview'
 import { formatBytes } from '../../utils/format'

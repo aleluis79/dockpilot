@@ -17,28 +17,37 @@ help:                       ## Muestra esta ayuda
 # ---------------------------------------------------------------------------
 # Entorno / Servicios
 # ---------------------------------------------------------------------------
-PORT_BACKEND  := 8000
-PORT_FRONTEND := 5173
+# Puertos propios para no chocar con los defaults de otras herramientas
+# (8000 = FastAPI/Flask/Jupyter, 5173 = Vite). Adyacentes y con prefijo raro:
+# se dictan sin pensarlo y es improbable que otro proceso los tome.
+PORT_BACKEND  := 8181
+PORT_FRONTEND := 8182
 
 up:                       ## Inicia backend y frontend en modo desarrollo
 	@echo "Starting DockPilot services..."
-	@if lsof -ti $(PORT_BACKEND) >/dev/null 2>&1; then \
-		echo "Backend already running on port $(PORT_BACKEND)"; \
-	else \
-		cd backend && .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port $(PORT_BACKEND) &> /tmp/dockpilot-backend.log & \
-		sleep 1; \
-		echo "Backend started on port $(PORT_BACKEND)"; \
+	@if lsof -ti TCP:$(PORT_BACKEND) >/dev/null 2>&1; then \
+		echo "ERROR: el puerto $(PORT_BACKEND) ya esta ocupado:"; \
+		lsof -i TCP:$(PORT_BACKEND) -sTCP:LISTEN -P -n | tail -n +2; \
+		echo "  Liberalo con: make down (o cambia PORT_BACKEND)"; \
+		exit 1; \
 	fi
-	@if lsof -ti $(PORT_FRONTEND) >/dev/null 2>&1; then \
-		echo "Frontend already running on port $(PORT_FRONTEND)"; \
-	else \
-		cd frontend && pnpm run dev &> /tmp/dockpilot-frontend.log & \
-		sleep 2; \
-		echo "Frontend started on port $(PORT_FRONTEND)"; \
+	@if lsof -ti TCP:$(PORT_FRONTEND) >/dev/null 2>&1; then \
+		echo "ERROR: el puerto $(PORT_FRONTEND) ya esta ocupado:"; \
+		lsof -i TCP:$(PORT_FRONTEND) -sTCP:LISTEN -P -n | tail -n +2; \
+		echo "  Liberalo con: make down (o cambia PORT_FRONTEND)"; \
+		exit 1; \
 	fi
-	@echo ""
-	@echo "  Backend:  http://localhost:$(PORT_BACKEND)"
-	@echo "  Frontend: http://localhost:$(PORT_FRONTEND)"
+	@cd backend && .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port $(PORT_BACKEND) &> /tmp/dockpilot-backend.log & \
+	cd frontend && pnpm run dev &> /tmp/dockpilot-frontend.log & \
+	sleep 5; \
+	if lsof -ti TCP:$(PORT_BACKEND) >/dev/null 2>&1 && lsof -ti TCP:$(PORT_FRONTEND) >/dev/null 2>&1; then \
+		echo "  Backend:  http://localhost:$(PORT_BACKEND)"; \
+		echo "  Frontend: http://localhost:$(PORT_FRONTEND)"; \
+	else \
+		echo "ERROR: algun servicio no pudo tomar su puerto. Revisa:"; \
+		echo "  /tmp/dockpilot-backend.log  /tmp/dockpilot-frontend.log"; \
+		exit 1; \
+	fi
 
 down:                     ## Detiene todos los servicios
 	@echo "Stopping DockPilot services..."

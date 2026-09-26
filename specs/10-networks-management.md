@@ -298,13 +298,30 @@ Característica: Gestión de redes Docker
   - `test_delete_network_conflict` (409 sin force) y `test_delete_network_success`.
   - `test_delete_builtin_network_rejected`: 400 sin llegar a contactar con el daemon.
   - `test_prune_skips_builtin_and_in_use`.
-- `tests/test_network_reference.py`: validación pura del nombre y del CIDR.
+  La validación del nombre y del CIDR se prueba a través del endpoint, no en un módulo aparte: lo que
+  importa es el `400` con el mensaje correcto, no la función interna.
 
 ### Frontend (`vitest` + `@testing-library/react`)
-- `tests/components/NetworksTable.test.tsx`: insignia de predefinida, subred formateada, recuento de contenedores y ausencia de botón de borrar en las predefinidas.
-- `tests/components/NetworkDetailModal.test.tsx`: subredes con gateway, contenedores conectados, indicadores y cierre.
-- `tests/components/NetworksView.test.tsx`: filtros, buscador, creación y confirmación de la limpieza.
-- `tests/components/CreateNetworkModal.test.tsx`: validación de nombre y subred antes de enviar, y mensajes de error del backend.
+- `tests/components/NetworksView.test.tsx`: reúne las tres piezas (tabla, detalle y creación) en un solo
+  archivo, que es como está organizado el resto de vistas del proyecto. Cubre:
+  - listado con recuento y subred, y los contadores de redes, en uso y predefinidas;
+  - los cuatro filtros (todas, en uso, no usadas, predefinidas) y el buscador por nombre;
+  - que una red predefinida no ofrezca botón de borrar, y que sí lo ofrezca una red propia;
+  - confirmación de borrado, su cancelación sin llamar a la API, y el error del daemon;
+  - la vista previa de la limpieza con el número exacto de redes afectadas;
+  - la creación con subred, el refresco del inventario tras crear, y los copy de ayuda;
+  - el detalle con IPAM, gateway, opciones, etiquetas y contenedores, y los tres estados vacíos;
+  - la validación en el modal de creación: sin nombre, y puerta de enlace sin subred.
+- `tests/components/actionButtonStyles.test.tsx`: **coherencia visual entre vistas**. Compara
+  directamente los atributos, porque es un requisito puramente visual y una coincidencia parcial
+  (mismo color, distinto radio, sin la sombra) se colaría sin que nada lo note. Cubre:
+  - "Limpiar no usadas" (redes) = "Limpiar no usados" (volúmenes): ámbar, `rounded-xl`, `Eraser`.
+  - "Nueva Red" (redes) = "Nuevo Contenedor" (navbar) = "Descargar imagen" (imágenes): azul con
+    sombra, `rounded-xl`, icono a `w-4 h-4`.
+  - El buscador de redes = el de volúmenes = el de imágenes, incluido el icono y la etiqueta oculta.
+  - Que el buscador **filtre de verdad**, no solo se parezca: sin eso, el test de estilo pasaría con
+    un buscador inerte.
+  - Que los dos patrones no se confundan entre sí: limpiar es ámbar, crear es azul.
 
 ### Verificación manual
 - Crear una red con subred, conectar un contenedor, comprobar que el recuento sube y que el borrado queda bloqueado.

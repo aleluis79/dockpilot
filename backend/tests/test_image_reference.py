@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Validación de la referencia de imagen en el borde (SPEC-07 §3.2)."""
 
 import pytest

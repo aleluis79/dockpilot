@@ -178,7 +178,7 @@ dockpilot/
 Desde la raíz del repositorio:
 
 ```bash
-make up            # Levanta backend (8000) y frontend (5173)
+make up            # Levanta backend (8181) y frontend (8182)
 make down          # Detiene ambos servicios
 make test          # Suite completa: pytest + vitest
 make lint          # Ruff (backend) + Oxlint (frontend)

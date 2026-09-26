@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React, { useEffect, useState } from 'react'
 import { MODAL_OVERLAY } from '../ui/modalOverlay'
 import { X, Server, Network, HardDrive, Terminal as TermIcon, Tag, Clock } from 'lucide-react'

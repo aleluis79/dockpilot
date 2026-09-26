@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 export interface NetworkSubnet {
   /** CIDR de la subred, p. ej. 172.18.0.0/16 */
   subnet: string

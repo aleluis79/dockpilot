@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React, { useState, useEffect } from 'react'
 import { Search, Star, ShieldCheck, Box, HardDrive, Sparkles, Loader2 } from 'lucide-react'
 import { dockerApi } from '../../services/dockerApi'

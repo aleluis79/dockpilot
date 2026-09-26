@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Primitivo compartido de consumo de disco (SPEC-08 §3.6, reutilizado por SPEC-09)."""
 
 from unittest.mock import AsyncMock

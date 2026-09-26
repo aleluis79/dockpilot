@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Doble de `aiodocker.volumes` con la semántica real de aiodocker 0.27.0.
 
 Fidelidad relevante para SPEC-08:

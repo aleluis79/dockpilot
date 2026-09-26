@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { MODAL_OVERLAY } from '../ui/modalOverlay'
 import { Terminal as TerminalIcon, X, RotateCw, Eraser } from 'lucide-react'

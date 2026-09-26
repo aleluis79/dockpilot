@@ -1,17 +1,20 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import React from 'react'
-import { Anchor, RefreshCw, Plus } from 'lucide-react'
+import { Anchor, RefreshCw, Plus, HelpCircle } from 'lucide-react'
 import { ThemeToggle } from './ThemeToggle'
 
 interface NavbarProps {
   onRefresh: () => void
   loading: boolean
   onOpenCreateModal?: () => void
+  onOpenHelp?: () => void
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
   onRefresh,
   loading,
   onOpenCreateModal,
+  onOpenHelp,
 }) => {
   return (
     <header className="border-b border-default bg-inset/80 backdrop-blur sticky top-0 z-40">
@@ -49,6 +52,20 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           <ThemeToggle />
+
+          {/* Mismas clases que el boton de refrescar: los dos son iconos
+              neutros de la barra, no acciones principales. */}
+          {onOpenHelp && (
+            <button
+              type="button"
+              onClick={onOpenHelp}
+              className="p-2 text-fg-muted hover:text-fg bg-surface hover:bg-fg/10 border border-default rounded-xl transition-all cursor-pointer"
+              title="Ayuda"
+              aria-label="Abrir la ayuda"
+            >
+              <HelpCircle className="w-4 h-4" />
+            </button>
+          )}
 
           <button
             onClick={onRefresh}

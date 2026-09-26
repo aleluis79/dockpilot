@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import App from '../src/App'
 import { ThemeProvider } from '../src/components/layout/ThemeProvider'
 
@@ -95,6 +95,28 @@ describe('App · conmutador de vista', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('abre la ayuda desde el navbar y la cierra sin salir de la app', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+
+    await waitFor(() => expect(screen.getByText('web-app')).toBeInTheDocument())
+    expect(screen.queryByRole('dialog', { name: /ayuda/i })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir la ayuda' }))
+
+    const ayuda = await screen.findByRole('dialog', { name: /ayuda/i })
+    expect(within(ayuda).getByText(/no tiene autenticación/i)).toBeInTheDocument()
+
+    fireEvent.click(within(ayuda).getByRole('button', { name: 'Cerrar ayuda' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /ayuda/i })).toBeNull())
+
+    // La app sigue montada detrás: la ayuda no ha navegado a otra vista
+    expect(screen.getByText('web-app')).toBeInTheDocument()
   })
 
   it('acota la franja de resumen al mismo ancho que el contenido', async () => {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from 'react'
 import {
   Search,
@@ -22,6 +23,7 @@ import { ImagesView } from './components/images/ImagesView'
 import { VolumesView } from './components/volumes/VolumesView'
 import { NetworksView } from './components/networks/NetworksView'
 import { SystemSummaryBar } from './components/system/SystemSummaryBar'
+import { HelpModal } from './components/help/HelpModal'
 import type { LocalImageSummary } from './types/image'
 
 function App() {
@@ -49,6 +51,7 @@ function App() {
     'containers' | 'images' | 'volumes' | 'networks'
   >('containers')
   const [presetImage, setPresetImage] = useState<string>('')
+  const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false)
 
   const runningCount = rawContainers.filter((c) => c.status.toLowerCase() === 'running').length
   const exitedCount = rawContainers.filter((c) => c.status.toLowerCase() === 'exited').length
@@ -66,12 +69,15 @@ function App() {
         onRefresh={refetch}
         loading={loading}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
+        onOpenHelp={() => setIsHelpOpen(true)}
       />
 
       {/* La franja comparte la columna del contenido: si se deja fuera de
           `main`, ocupa todo el ancho de la pagina y desentona con las tablas. */}
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <SystemSummaryBar />
+
+      <HelpModal open={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
       </div>
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
