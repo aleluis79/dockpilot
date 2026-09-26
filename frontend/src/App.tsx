@@ -7,6 +7,7 @@ import { ContainersTable } from './components/containers/ContainersTable'
 import { ContainerDetailModal } from './components/containers/ContainerDetailModal'
 import { DeleteConfirmModal } from './components/containers/DeleteConfirmModal'
 import { LogsModal } from './components/logs/LogsModal'
+import { StatsModal } from './components/stats/StatsModal'
 import { CreateContainerModal } from './components/containers/CreateContainerModal'
 import { TerminalModal } from './components/terminal/TerminalModal'
 
@@ -28,6 +29,7 @@ function App() {
   const [selectedContainer, setSelectedContainer] = useState<ContainerSummary | null>(null)
   const [containerToDelete, setContainerToDelete] = useState<ContainerSummary | null>(null)
   const [containerForLogs, setContainerForLogs] = useState<ContainerSummary | null>(null)
+  const [containerForStats, setContainerForStats] = useState<ContainerSummary | null>(null)
   const [containerForTerminal, setContainerForTerminal] = useState<ContainerSummary | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false)
 
@@ -117,6 +119,7 @@ function App() {
           onAction={executeAction}
           onSelect={(c) => setSelectedContainer(c)}
           onViewLogs={(c) => setContainerForLogs(c)}
+          onViewStats={(c) => setContainerForStats(c)}
           onOpenTerminal={(c) => setContainerForTerminal(c)}
           onRequestDelete={(c) => setContainerToDelete(c)}
         />
@@ -132,6 +135,13 @@ function App() {
       <LogsModal
         container={containerForLogs}
         onClose={() => setContainerForLogs(null)}
+      />
+
+      {/* Modal de Métricas en Vivo */}
+      <StatsModal
+        isOpen={!!containerForStats}
+        container={containerForStats}
+        onClose={() => setContainerForStats(null)}
       />
 
       {/* Modal de Terminal Interactivo */}

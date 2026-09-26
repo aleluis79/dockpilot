@@ -2,23 +2,30 @@ import asyncio
 import inspect
 import json
 import shlex
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
+from contextlib import aclosing
+from typing import Annotated
+
+import aiodocker
 from aiodocker.exceptions import DockerError
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 
 from app.core.docker import get_docker
 from app.services.container_service import parse_docker_log_line
+from app.services.stats_service import StatsService
+
+DockerDep = Annotated[aiodocker.Docker, Depends(get_docker)]
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
 
 
 @router.websocket("/containers/{container_id}/logs")
 async def container_logs_ws(
+    docker: DockerDep,
     websocket: WebSocket,
     container_id: str,
     tail: int = Query(100),
     timestamps: bool = Query(True),
     follow: bool = Query(True),
-    docker=Depends(get_docker),
 ):
     """Canal WebSocket para streaming de logs de contenedores en tiempo real."""
     await websocket.accept()
@@ -66,8 +73,55 @@ async def container_logs_ws(
                 {
                     "timestamp": None,
                     "stream": "system",
-                    "message": f"--- Stream finalizado: {str(e)} ---",
+                    "message": f"--- Stream finalizado: {e!s} ---",
                 }
+            )
+        except Exception:
+            pass
+    finally:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+@router.websocket("/containers/{container_id}/stats")
+async def container_stats_ws(
+    docker: DockerDep,
+    websocket: WebSocket,
+    container_id: str,
+):
+    """Canal WebSocket para streaming continuo de métricas (CPU, RAM, Red, Disco)."""
+    await websocket.accept()
+
+    try:
+        container = await docker.containers.get(container_id)
+        info = await container.show()
+        c_name = info.get("Name", f"/{container_id}").lstrip("/")
+    except DockerError as e:
+        if e.status == 404:
+            await websocket.close(code=4404, reason="Contenedor no encontrado")
+            return
+        await websocket.close(code=1011, reason=str(e))
+        return
+    except Exception as e:
+        await websocket.close(code=1011, reason=str(e))
+        return
+
+    try:
+        # aclosing garantiza el cierre del generador de Docker y la liberación del socket
+        # underlying en cuanto el cliente se desconecta.
+        stats_stream = StatsService.stream_stats(container, container_id, c_name)
+        async with aclosing(stats_stream):
+            async for stats in stats_stream:
+                await websocket.send_json(stats.model_dump())
+    except WebSocketDisconnect:
+        # Desconexión limpia del cliente web
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json(
+                {"error": f"Stream de estadísticas finalizado: {e!s}"}
             )
         except Exception:
             pass
@@ -80,13 +134,13 @@ async def container_logs_ws(
 
 @router.websocket("/containers/{container_id}/terminal")
 async def container_terminal_ws(
+    docker: DockerDep,
     websocket: WebSocket,
     container_id: str,
     shell: str = Query("/bin/sh"),
     user: str = Query(""),
     cols: int = Query(80),
     rows: int = Query(24),
-    docker=Depends(get_docker),
 ):
     """Canal WebSocket para sesión de terminal interactiva (exec TTY) en un contenedor."""
     await websocket.accept()
@@ -135,20 +189,20 @@ async def container_terminal_ws(
                     user=user if user else "",
                 )
             except Exception:
-                await websocket.close(code=4400, reason=f"No se pudo iniciar la shell: {str(e)}")
+                await websocket.close(code=4400, reason=f"No se pudo iniciar la shell: {e!s}")
                 return
         else:
-            await websocket.close(code=4400, reason=f"No se pudo iniciar la shell: {str(e)}")
+            await websocket.close(code=4400, reason=f"No se pudo iniciar la shell: {e!s}")
             return
     except Exception as e:
-        await websocket.close(code=4400, reason=f"Error al iniciar exec: {str(e)}")
+        await websocket.close(code=4400, reason=f"Error al iniciar exec: {e!s}")
         return
 
     stream = exec_instance.start()
     try:
         await stream._init()
     except Exception as e:
-        await websocket.close(code=4400, reason=f"Error al inicializar stream: {str(e)}")
+        await websocket.close(code=4400, reason=f"Error al inicializar stream: {e!s}")
         return
 
     try:
@@ -173,7 +227,11 @@ async def container_terminal_ws(
                 msg = await stream.read_out()
                 if msg is None:
                     break
-                data_bytes = msg.data if isinstance(msg.data, bytes) else str(msg.data).encode("utf-8", errors="replace")
+                data_bytes = (
+                    msg.data
+                    if isinstance(msg.data, bytes)
+                    else str(msg.data).encode("utf-8", errors="replace")
+                )
                 text = data_bytes.decode("utf-8", errors="replace")
                 await websocket.send_json({"type": "stdout", "data": text})
         except Exception:
@@ -211,7 +269,7 @@ async def container_terminal_ws(
     writer_task = asyncio.create_task(ws_to_docker())
 
     try:
-        done, pending = await asyncio.wait(
+        _done, pending = await asyncio.wait(
             [reader_task, writer_task],
             return_when=asyncio.FIRST_COMPLETED,
         )

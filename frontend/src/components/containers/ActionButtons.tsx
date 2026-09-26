@@ -1,5 +1,5 @@
 import React from 'react'
-import { Play, Square, RotateCw, Pause, PlayCircle, Trash2, Loader2, FileText, Terminal as TerminalIcon } from 'lucide-react'
+import { Play, Square, RotateCw, Pause, PlayCircle, Trash2, Loader2, FileText, Terminal as TerminalIcon, Activity } from 'lucide-react'
 import type { ContainerSummary } from '../../types/docker'
 
 interface ActionButtonsProps {
@@ -11,6 +11,7 @@ interface ActionButtonsProps {
     force?: boolean
   ) => void
   onViewLogs?: (container: ContainerSummary) => void
+  onViewStats?: (container: ContainerSummary) => void
   onOpenTerminal?: (container: ContainerSummary) => void
   onRequestDelete?: (container: ContainerSummary) => void
 }
@@ -20,6 +21,7 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
   actionInProgress,
   onAction,
   onViewLogs,
+  onViewStats,
   onOpenTerminal,
   onRequestDelete,
 }) => {
@@ -92,6 +94,17 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
           className="p-1.5 text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors cursor-pointer"
         >
           <FileText className="w-4 h-4" />
+        </button>
+      )}
+
+      {isRunning && onViewStats && (
+        <button
+          type="button"
+          onClick={() => onViewStats(container)}
+          title={`Ver métricas de ${container.name}`}
+          className="p-1.5 text-zinc-400 hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors cursor-pointer"
+        >
+          <Activity className="w-4 h-4" />
         </button>
       )}
 

@@ -1,0 +1,29 @@
+[tool.ruff]
+# Mínimo documentado en agent.md (Python 3.12+)
+target-version = "py312"
+# 120 en lugar de 88: las descripciones de los schemas en español son cadenas
+# largas que no aportan nada si se parten. El valor fija el umbral de E501.
+line-length = 120
+extend-exclude = [".venv", ".pytest_cache", ".ruff_cache"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade (PEP 585 / PEP 604)
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "RUF", # reglas propias de ruff
+]
+ignore = [
+    # El servicio Docker traduce errores arbitrarios del driver (aiodocker,
+    # timeouts de socket, JSON malformado) a HTTPException o al cierre del
+    # WebSocket. Enumerar excepciones concretas haría que un error no previsto
+    # se convirtiera en un 500 opaco en lugar de propagarse con su detalle.
+    "BLE001",
+    # Los bloques de limpieza de WebSocket (try/except/pass) son best-effort a
+    # propósito: el socket ya está cerrado y no hay a quién reportar el fallo.
+    "S110",
+]

@@ -62,8 +62,8 @@ backend-serve:              ## Inicia el servidor (uvicorn --reload)
 backend-test:               ## Ejecuta la suite de pruebas (pytest)
 	cd backend && PYTHONPATH=. .venv/bin/pytest -v
 
-backend-lint:               ## Verifica el código con Ruff (si está disponible)
-	cd backend && .venv/bin/python -m ruff check app || echo "ruff no disponible, omitiendo lint"
+backend-lint:               ## Verifica el código con Ruff (config en backend/pyproject.toml)
+	cd backend && .venv/bin/python -m ruff check app
 
 backend: backend-install backend-serve  ## Prepara y levanta el backend
 

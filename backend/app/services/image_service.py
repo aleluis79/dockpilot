@@ -1,7 +1,8 @@
-from typing import List, Any
-from fastapi import HTTPException
+from typing import Any
+
 import aiodocker
 from aiodocker.exceptions import DockerError
+from fastapi import HTTPException
 
 from app.schemas.image import ImageSearchResult, LocalImageSummary
 
@@ -16,7 +17,7 @@ def _get_image_dict(img: Any) -> dict:
 
 class ImageService:
     @staticmethod
-    async def list_local_images(docker: aiodocker.Docker) -> List[LocalImageSummary]:
+    async def list_local_images(docker: aiodocker.Docker) -> list[LocalImageSummary]:
         try:
             raw_images = await docker.images.list()
             result = []
@@ -36,14 +37,14 @@ class ImageService:
                     )
             return result
         except DockerError as e:
-            raise HTTPException(status_code=503, detail=f"Error al listar imágenes: {e.message}")
+            raise HTTPException(status_code=503, detail=f"Error al listar imágenes: {e.message}") from e
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error inesperado al listar imágenes: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error inesperado al listar imágenes: {e!s}") from e
 
     @staticmethod
     async def search_images(
         docker: aiodocker.Docker, term: str, limit: int = 10
-    ) -> List[ImageSearchResult]:
+    ) -> list[ImageSearchResult]:
         if not term or not term.strip():
             raise HTTPException(status_code=400, detail="El parámetro 'term' de búsqueda no puede estar vacío")
 
@@ -65,6 +66,6 @@ class ImageService:
         except HTTPException:
             raise
         except DockerError as e:
-            raise HTTPException(status_code=503, detail=f"Error al buscar en Docker Hub: {e.message}")
+            raise HTTPException(status_code=503, detail=f"Error al buscar en Docker Hub: {e.message}") from e
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al buscar imágenes: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error al buscar imágenes: {e!s}") from e

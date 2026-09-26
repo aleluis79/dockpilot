@@ -1,17 +1,19 @@
 import inspect
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import List, Optional, Any, AsyncIterator
-from fastapi import HTTPException
+from typing import Any
+
 import aiodocker
 from aiodocker.exceptions import DockerError
+from fastapi import HTTPException
 
 from app.schemas.container import (
-    PortMapping,
-    ContainerSummary,
-    ContainerDetail,
     ContainerActionResponse,
+    ContainerDetail,
+    ContainerSummary,
     CreateContainerRequest,
     CreateContainerResponse,
+    PortMapping,
 )
 from app.schemas.log import LogEntry, LogSnapshotResponse
 
@@ -25,7 +27,7 @@ def _get_container_dict(c: Any) -> dict:
     return {}
 
 
-def _parse_port_mappings(ports_raw: list) -> List[PortMapping]:
+def _parse_port_mappings(ports_raw: list) -> list[PortMapping]:
     result = []
     for p in ports_raw or []:
         if isinstance(p, dict):
@@ -56,7 +58,7 @@ def parse_docker_log_line(raw_line: str, default_stream: str = "stdout") -> LogE
     """Parsea una línea cruda de log de Docker separando timestamp y stream."""
     clean = raw_line.rstrip("\r\n")
     parts = clean.split(" ", 1)
-    timestamp: Optional[str] = None
+    timestamp: str | None = None
     message = clean
 
     # Detectar si la primera parte es un ISO-8601 timestamp (ej. 2026-09-25T20:24:39.154430789Z)
@@ -77,8 +79,8 @@ class ContainerService:
     async def list_containers(
         docker: aiodocker.Docker,
         all: bool = True,
-        status: Optional[str] = None,
-    ) -> List[ContainerSummary]:
+        status: str | None = None,
+    ) -> list[ContainerSummary]:
         try:
             filters = {}
             if status:
@@ -110,18 +112,18 @@ class ContainerService:
             raise HTTPException(
                 status_code=503 if e.status >= 500 else e.status,
                 detail=f"Error al conectar con Docker daemon: {e.message}",
-            )
+            ) from e
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=503, detail=f"No se pudo conectar con Docker: {str(e)}")
+            raise HTTPException(status_code=503, detail=f"No se pudo conectar con Docker: {e!s}") from e
 
     @staticmethod
     async def get_container(docker: aiodocker.Docker, container_id: str) -> ContainerDetail:
         try:
             container = await docker.containers.get(container_id)
             info = await container.show()
-            
+
             config = info.get("Config", {})
             state_info = info.get("State", {})
             network_settings = info.get("NetworkSettings", {})
@@ -171,12 +173,12 @@ class ContainerService:
             )
         except DockerError as e:
             if e.status == 404:
-                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado")
-            raise HTTPException(status_code=e.status, detail=e.message)
+                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
+            raise HTTPException(status_code=e.status, detail=e.message) from e
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al inspeccionar contenedor: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error al inspeccionar contenedor: {e!s}") from e
 
     @staticmethod
     async def get_logs_snapshot(
@@ -191,7 +193,7 @@ class ContainerService:
                 stdout=True, stderr=True, follow=False, tail=tail, timestamps=timestamps
             )
             raw_lines = await res if inspect.iscoroutine(res) else res
-            
+
             entries = [parse_docker_log_line(line) for line in raw_lines]
             return LogSnapshotResponse(
                 id=container_id,
@@ -200,12 +202,12 @@ class ContainerService:
             )
         except DockerError as e:
             if e.status == 404:
-                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado")
-            raise HTTPException(status_code=e.status, detail=e.message)
+                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
+            raise HTTPException(status_code=e.status, detail=e.message) from e
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error al obtener logs: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error al obtener logs: {e!s}") from e
 
     @staticmethod
     async def stream_logs(
@@ -225,8 +227,8 @@ class ContainerService:
                 yield parse_docker_log_line(raw_line)
         except DockerError as e:
             if e.status == 404:
-                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado")
-            raise HTTPException(status_code=e.status, detail=e.message)
+                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
+            raise HTTPException(status_code=e.status, detail=e.message) from e
 
     @staticmethod
     async def start_container(docker: aiodocker.Docker, container_id: str) -> ContainerActionResponse:
@@ -241,12 +243,12 @@ class ContainerService:
             )
         except DockerError as e:
             if e.status == 404:
-                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado")
+                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
             if e.status in [409, 304]:
                 return ContainerActionResponse(
                     id=container_id, action="start", success=True, message="El contenedor ya estaba iniciado"
                 )
-            raise HTTPException(status_code=e.status, detail=e.message)
+            raise HTTPException(status_code=e.status, detail=e.message) from e
 
     @staticmethod
     async def stop_container(
@@ -263,12 +265,12 @@ class ContainerService:
             )
         except DockerError as e:
             if e.status == 404:
-                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado")
+                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
             if e.status == 304:
                 return ContainerActionResponse(
                     id=container_id, action="stop", success=True, message="El contenedor ya estaba detenido"
                 )
-            raise HTTPException(status_code=e.status, detail=e.message)
+            raise HTTPException(status_code=e.status, detail=e.message) from e
 
     @staticmethod
     async def restart_container(
@@ -285,8 +287,8 @@ class ContainerService:
             )
         except DockerError as e:
             if e.status == 404:
-                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado")
-            raise HTTPException(status_code=e.status, detail=e.message)
+                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
+            raise HTTPException(status_code=e.status, detail=e.message) from e
 
     @staticmethod
     async def pause_container(docker: aiodocker.Docker, container_id: str) -> ContainerActionResponse:
@@ -301,8 +303,8 @@ class ContainerService:
             )
         except DockerError as e:
             if e.status == 404:
-                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado")
-            raise HTTPException(status_code=e.status, detail=e.message)
+                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
+            raise HTTPException(status_code=e.status, detail=e.message) from e
 
     @staticmethod
     async def unpause_container(docker: aiodocker.Docker, container_id: str) -> ContainerActionResponse:
@@ -317,8 +319,8 @@ class ContainerService:
             )
         except DockerError as e:
             if e.status == 404:
-                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado")
-            raise HTTPException(status_code=e.status, detail=e.message)
+                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
+            raise HTTPException(status_code=e.status, detail=e.message) from e
 
     @staticmethod
     async def remove_container(
@@ -335,13 +337,13 @@ class ContainerService:
             )
         except DockerError as e:
             if e.status == 404:
-                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado")
+                raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
             if e.status == 409:
                 raise HTTPException(
                     status_code=409,
                     detail=f"Conflicto al eliminar contenedor {container_id}: {e.message}",
-                )
-            raise HTTPException(status_code=e.status, detail=e.message)
+                ) from e
+            raise HTTPException(status_code=e.status, detail=e.message) from e
 
     @staticmethod
     async def create_container(
@@ -359,7 +361,7 @@ class ContainerService:
                         raise HTTPException(
                             status_code=404,
                             detail=f"No se pudo descargar la imagen '{payload.image}': {pull_err.message}",
-                        )
+                        ) from pull_err
 
             # 2. Configuración de puertos
             exposed_ports = {}
@@ -416,10 +418,10 @@ class ContainerService:
                 raise HTTPException(
                     status_code=409,
                     detail=f"Conflicto al crear contenedor: {e.message}",
-                )
-            raise HTTPException(status_code=e.status, detail=e.message)
+                ) from e
+            raise HTTPException(status_code=e.status, detail=e.message) from e
         except HTTPException:
             raise
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error inesperado al crear contenedor: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Error inesperado al crear contenedor: {e!s}") from e
 

@@ -179,28 +179,28 @@ Característica: Monitorización y visualización de métricas en tiempo real
 
 ## 7. Plan de Tareas (Tasks)
 
-- [ ] **Fase 1: Contratos y Schemas**
-  - [ ] Crear `backend/app/schemas/stats.py` con el modelo Pydantic `ContainerStats`
-  - [ ] Crear `frontend/src/types/stats.ts` con interfaces TypeScript `ContainerStats` y `StatsHistoryPoint`
-- [ ] **Fase 2: Tests Primero en Backend (TDD)**
-  - [ ] Añadir fixtures de stats en `backend/tests/conftest.py`
-  - [ ] Crear `backend/tests/test_stats.py` cubriendo cálculo, endpoint REST y WebSocket
-- [ ] **Fase 3: Implementación Backend**
-  - [ ] Implementar helper de cálculo de métricas en `backend/app/services/stats_service.py` (o módulo de servicio correspondiente)
-  - [ ] Implementar endpoint REST `GET /api/v1/containers/{id}/stats` en `backend/app/api/v1/containers.py`
-  - [ ] Implementar endpoint WebSocket `/ws/containers/{id}/stats` en `backend/app/api/v1/ws.py`
-  - [ ] Ejecutar `pytest -v` y validar aprobación al 100%
-- [ ] **Fase 4: Tests Primero en Frontend**
-  - [ ] Crear `frontend/tests/hooks/useDockerStats.test.ts`
-  - [ ] Crear `frontend/tests/components/StatsModal.test.tsx`
-- [ ] **Fase 5: Implementación Frontend**
-  - [ ] Añadir método `getContainerStats` en `frontend/src/services/dockerApi.ts`
-  - [ ] Implementar hook `frontend/src/hooks/useDockerStats.ts` con gestión de WebSocket y buffer circular de historial
-  - [ ] Crear componente `frontend/src/components/stats/StatsSparkline.tsx` para visualización gráfica ligera en SVG
-  - [ ] Crear componente `frontend/src/components/stats/StatsModal.tsx` con cards de métricas, barras reactivas y formateadores de bytes
-  - [ ] Integrar botón de estadísticas en `frontend/src/components/containers/ActionButtons.tsx` / `ContainersTable.tsx` y conectar con `App.tsx`
-- [ ] **Fase 6: Verificación y Quality Gates**
-  - [ ] Ejecutar y aprobar suite backend (`PYTHONPATH=. pytest -v`)
-  - [ ] Ejecutar y aprobar suite frontend (`pnpm run test`)
-  - [ ] Ejecutar `pnpm run lint` (Oxlint) y `pnpm run build` (`tsc -b && vite build`)
-  - [ ] Marcar todas las tareas como completadas (`[x]`) en este documento
+- [x] **Fase 1: Contratos y Schemas**
+  - [x] Crear `backend/app/schemas/stats.py` con el modelo Pydantic `ContainerStats`
+  - [x] Crear `frontend/src/types/stats.ts` con interfaces TypeScript `ContainerStats` y `StatsHistoryPoint`
+- [x] **Fase 2: Tests Primero en Backend (TDD)**
+  - [x] Añadir fixtures de stats en `backend/tests/conftest.py`
+  - [x] Crear `backend/tests/test_stats.py` cubriendo cálculo, endpoint REST y WebSocket
+- [x] **Fase 3: Implementación Backend**
+  - [x] Implementar helper de cálculo de métricas en `backend/app/services/stats_service.py` (o módulo de servicio correspondiente)
+  - [x] Implementar endpoint REST `GET /api/v1/containers/{id}/stats` en `backend/app/api/v1/containers.py`
+  - [x] Implementar endpoint WebSocket `/ws/containers/{id}/stats` en `backend/app/api/v1/ws.py`
+  - [x] Ejecutar `pytest -v` y validar aprobación al 100%
+- [x] **Fase 4: Tests Primero en Frontend**
+  - [x] Crear `frontend/tests/hooks/useDockerStats.test.ts`
+  - [x] Crear `frontend/tests/components/StatsModal.test.tsx`
+- [x] **Fase 5: Implementación Frontend**
+  - [x] Añadir método `getContainerStats` en `frontend/src/services/dockerApi.ts`
+  - [x] Implementar hook `frontend/src/hooks/useDockerStats.ts` con gestión de WebSocket y buffer circular de historial
+  - [x] Crear componente `frontend/src/components/stats/StatsSparkline.tsx` para visualización gráfica ligera en SVG
+  - [x] Crear componente `frontend/src/components/stats/StatsModal.tsx` con cards de métricas, barras reactivas y formateadores de bytes
+  - [x] Integrar botón de estadísticas en `frontend/src/components/containers/ActionButtons.tsx` / `ContainersTable.tsx` y conectar con `App.tsx`
+- [x] **Fase 6: Verificación y Quality Gates**
+  - [x] Ejecutar y aprobar suite backend (`PYTHONPATH=. pytest -v`)
+  - [x] Ejecutar y aprobar suite frontend (`pnpm run test`)
+  - [x] Ejecutar `pnpm run lint` (Oxlint) y `pnpm run build` (`tsc -b && vite build`)
+  - [x] Marcar todas las tareas como completadas (`[x]`) en este documento

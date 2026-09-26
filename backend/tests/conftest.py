@@ -135,6 +135,55 @@ class FakeDockerContainer:
             raise DockerError(409, {"message": "You cannot remove a running container. Stop the container before attempting removal or force remove"})
         return True
 
+    def _raw_stats_payload(self):
+        """Payload crudo de /containers/{id}/stats con valores conocidos y calculables.
+
+        CPU:        dCPU=1000, dSystem=10000, online_cpus=2 -> 20.0%
+        Memoria:    usage=1000, inactive_file=500, limit=10000 -> 500 B (5.0%)
+        Red:        eth0 rx=300, tx=700
+        Bloque:     Read=111, Write=222
+        """
+        return {
+            "read": "2026-09-26T10:00:00.000000000Z",
+            "preread": "2026-09-26T09:59:58.000000000Z",
+            "cpu_stats": {
+                "cpu_usage": {"total_usage": 2000, "percpu_usage": [1000, 1000]},
+                "system_cpu_usage": 20000,
+                "online_cpus": 2,
+            },
+            "precpu_stats": {
+                "cpu_usage": {"total_usage": 1000, "percpu_usage": [500, 500]},
+                "system_cpu_usage": 10000,
+                "online_cpus": 2,
+            },
+            "memory_stats": {
+                "usage": 1000,
+                "limit": 10000,
+                "stats": {"inactive_file": 500},
+            },
+            "networks": {"eth0": {"rx_bytes": 300, "tx_bytes": 700}},
+            "blkio_stats": {
+                "io_service_bytes_recursive": [
+                    {"op": "Read", "value": 111},
+                    {"op": "Write", "value": 222},
+                    {"op": "Sync", "value": 999},
+                ]
+            },
+            "pids_stats": {"current": 5},
+        }
+
+    async def stats(self, stream=True, timeout=None):
+        if self._status != "running":
+            raise DockerError(409, {"message": f"Container {self.id} is not running"})
+        if not stream:
+            return [self._raw_stats_payload()]
+
+        async def _stream():
+            yield self._raw_stats_payload()
+            yield self._raw_stats_payload()
+
+        return _stream()
+
     async def log(self, stdout=True, stderr=True, follow=False, tail=100, timestamps=True):
         sample_logs = [
             "2026-09-25T12:00:01.000000000Z Server initializing...\n",

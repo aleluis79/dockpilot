@@ -7,6 +7,7 @@ import type {
   CreateContainerRequest,
   CreateContainerResponse,
 } from '../types/docker'
+import type { ContainerStats } from '../types/stats'
 
 const BASE_URL = '/api/v1'
 
@@ -90,6 +91,11 @@ export const dockerApi = {
       method: 'DELETE',
     })
     return handleResponse<ContainerActionResponse>(res)
+  },
+
+  async getContainerStats(id: string): Promise<ContainerStats> {
+    const res = await fetch(`${BASE_URL}/containers/${id}/stats`)
+    return handleResponse<ContainerStats>(res)
   },
 
   async getLocalImages(): Promise<LocalImageSummary[]> {

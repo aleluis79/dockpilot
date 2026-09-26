@@ -1,9 +1,8 @@
-from typing import Optional, List
 from pydantic import BaseModel, Field
 
 
 class LogEntry(BaseModel):
-    timestamp: Optional[str] = None
+    timestamp: str | None = None
     stream: str = "stdout"  # "stdout" | "stderr" | "system"
     message: str
 
@@ -11,4 +10,4 @@ class LogEntry(BaseModel):
 class LogSnapshotResponse(BaseModel):
     id: str
     total_lines: int
-    lines: List[LogEntry] = Field(default_factory=list)
+    lines: list[LogEntry] = Field(default_factory=list)

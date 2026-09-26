@@ -1,4 +1,3 @@
-from typing import List
 from pydantic import BaseModel, Field
 
 
@@ -11,6 +10,6 @@ class ImageSearchResult(BaseModel):
 
 class LocalImageSummary(BaseModel):
     id: str
-    tags: List[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
     size: int = 0
     created: int = 0

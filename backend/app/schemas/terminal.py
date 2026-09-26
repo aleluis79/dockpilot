@@ -1,4 +1,5 @@
-from typing import Optional, Literal
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -15,5 +16,5 @@ class TerminalInputMessage(BaseModel):
 
 class TerminalServerMessage(BaseModel):
     type: Literal["stdout", "system", "error"]
-    data: Optional[str] = Field(None, description="Datos emitidos por el stream de terminal")
-    message: Optional[str] = Field(None, description="Mensaje de error o notificación del sistema")
+    data: str | None = Field(None, description="Datos emitidos por el stream de terminal")
+    message: str | None = Field(None, description="Mensaje de error o notificación del sistema")

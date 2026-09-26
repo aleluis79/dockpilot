@@ -1,8 +1,8 @@
-from typing import Optional
 import aiodocker
+
 from app.core.config import settings
 
-_docker_client: Optional[aiodocker.Docker] = None
+_docker_client: aiodocker.Docker | None = None
 
 
 async def init_docker() -> aiodocker.Docker:

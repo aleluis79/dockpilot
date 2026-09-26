@@ -15,6 +15,7 @@ interface ContainersTableProps {
   ) => void
   onSelect: (container: ContainerSummary) => void
   onViewLogs?: (container: ContainerSummary) => void
+  onViewStats?: (container: ContainerSummary) => void
   onOpenTerminal?: (container: ContainerSummary) => void
   onRequestDelete?: (container: ContainerSummary) => void
 }
@@ -26,6 +27,7 @@ export const ContainersTable: React.FC<ContainersTableProps> = ({
   onAction,
   onSelect,
   onViewLogs,
+  onViewStats,
   onOpenTerminal,
   onRequestDelete,
 }) => {
@@ -118,6 +120,7 @@ export const ContainersTable: React.FC<ContainersTableProps> = ({
                     actionInProgress={actionInProgress}
                     onAction={onAction}
                     onViewLogs={onViewLogs}
+                    onViewStats={onViewStats}
                     onOpenTerminal={onOpenTerminal}
                     onRequestDelete={onRequestDelete}
                   />
