@@ -21,6 +21,8 @@ export interface NetworkSummary {
   container_count: number
   /** Red predefinida de Docker (none, host, bridge); no se puede borrar. */
   is_builtin: boolean
+  /** Proyecto Docker Compose al que pertenece, si la etiqueta existe. */
+  compose_project?: string | null
 }
 
 export interface NetworkDetail extends NetworkSummary {

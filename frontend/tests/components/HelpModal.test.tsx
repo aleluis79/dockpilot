@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, within } from '@testing-library/react'
 import { HelpModal } from '../../src/components/help/HelpModal'
+import { VISTAS } from '../../src/vistas'
 
 /**
  * El manual se navega por secciones, no se lee de un tirón: solo está montada
@@ -48,13 +49,87 @@ describe('HelpModal', () => {
     expect(contenido().getByText(/Resumen del host/i)).toBeInTheDocument()
   })
 
-  it('documenta las cuatro pestañas', () => {
+  it('documenta todas las pestañas del panel', () => {
+    // Regresión: la ayuda decía "cuatro pestañas" después de que existieran
+    // cinco. Ahora recorre la lista real, así que añadir una pestaña sin
+    // documentarla rompe este test.
     render(<HelpModal open onClose={vi.fn()} />)
     irA(/pestañas/i)
 
-    for (const titulo of ['Contenedores', 'Imágenes', 'Volúmenes', 'Redes']) {
-      expect(contenido().getByRole('heading', { name: titulo })).toBeInTheDocument()
+    for (const vista of VISTAS) {
+      expect(
+        contenido().getByRole('heading', { name: new RegExp(`^${vista.label}$`) })
+      ).toBeInTheDocument()
     }
+  })
+
+  it('cuenta las pestañas que documenta', () => {
+    // El texto suelto ("cinco pestañas") es donde se desfasó la ayuda: si el
+    // número no cuadra con la lista real, el test lo delata.
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/pestañas/i)
+
+    const enPalabras = ['una', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete']
+    const dicho = enPalabras.find((n) => contenido().queryByText(new RegExp(`${n} pestañas`)))
+
+    expect(dicho).toBeDefined()
+    expect(enPalabras.indexOf(dicho as string) + 1).toBe(VISTAS.length)
+  })
+
+  it('documenta la pestaña de proyectos y lo que se puede hacer en ella', () => {
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/pestañas/i)
+
+    expect(contenido().getByText(/Huerfano/i)).toBeInTheDocument()
+    expect(contenido().getByText(/no ejecuta nada/i)).toBeInTheDocument()
+  })
+
+  it('documenta que bajar un proyecto con volúmenes es la acción más destructiva', () => {
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/irreversibles/i)
+
+    expect(contenido().getByText(/dos confirmaciones/i)).toBeInTheDocument()
+    expect(
+      contenido().getByText(/acción más destructiva del panel/i)
+    ).toBeInTheDocument()
+  })
+
+  it('documenta que se puede elegir el archivo sin copiar la ruta', () => {
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/pestañas/i)
+
+    // El explorador es la respuesta a "tengo que teclear la ruta", que era el
+    // complaint real: los proyectos que no están en marcha no dejan etiquetas y
+    // no salen en la tabla, así que hay que ir a buscarlos.
+    expect(
+      contenido().getByText(/no tener que copiar la ruta a mano/i)
+    ).toBeInTheDocument()
+  })
+
+  it('aclara que el campo de la ruta sigue siendo editable', () => {
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/pestañas/i)
+
+    // El explorador solo recorre el directorio personal: si se presentara como la
+    // única forma de elegir archivo, sería un problema.
+    expect(contenido().getByText(/sigue siendo editable/i)).toBeInTheDocument()
+  })
+
+  it('explica el límite del explorador cuando algo no funciona', () => {
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/si algo no funciona/i)
+
+    expect(
+      contenido().getByRole('heading', { name: /no deja subir ni salir/i })
+    ).toBeInTheDocument()
+  })
+
+  it('explica que compose puede faltar sin que se rompa el inventario', () => {
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/no funciona/i)
+
+    expect(contenido().getAllByText(/docker compose/i).length).toBeGreaterThan(0)
+    expect(contenido().getByText(/siguen\s+funcionando/i)).toBeInTheDocument()
   })
 
   it('explica qué significa que un volumen no tenga contenedores', () => {

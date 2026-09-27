@@ -16,6 +16,7 @@ from app.schemas.network import (
     NetworkSubnet,
     NetworkSummary,
 )
+from app.services.compose_service import compose_project_of
 
 # Docker gestiona estas tres y las recrea en cada arranque: borrarlas es un error.
 BUILTIN_NETWORKS = frozenset({"none", "host", "bridge"})
@@ -251,6 +252,8 @@ def _to_summary(raw: dict[str, Any], container_count: int) -> NetworkSummary:
         subnets=_subnets(raw.get("IPAM")),
         container_count=container_count,
         is_builtin=name in BUILTIN_NETWORKS,
+        # Proyecto compose al que pertenece, si la etiqueta existe (SPEC-11).
+        compose_project=compose_project_of(raw.get("Labels")),
     )
 
 

@@ -11,6 +11,8 @@ import {
   Server,
   Trash2,
   Radio,
+  Boxes,
+  FileSearch,
 } from 'lucide-react'
 import { MODAL_OVERLAY } from '../ui/modalOverlay'
 
@@ -166,7 +168,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                 <div>
                   <h3 className="text-base font-semibold text-fg">Pestañas</h3>
                   <p className="text-[13px] text-fg-muted mt-2">
-                    Los recursos se organizan en cuatro pestañas, cada una con sus
+                    Los recursos se organizan en cinco pestañas, cada una con sus
                     filtros y su buscador.
                   </p>
                 </div>
@@ -198,6 +200,37 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                     Se pueden crear indicando un CIDR o dejar que Docker asigne el
                     siguiente libre. Las predefinidas se muestran atenuadas y no se
                     pueden borrar.
+                  </TablaPestanas>
+
+                  <TablaPestanas icono={Boxes} titulo="Proyectos">
+                    Los proyectos de <strong className="text-fg">Docker Compose</strong>{' '}
+                    que hay en el host, agrupando contenedores, redes y volúmenes
+                    por proyecto. Un proyecto marcado{' '}
+                    <strong className="text-fg">Huerfano</strong> ya no tiene
+                    contenedores pero conserva recursos que ocupan espacio. Desde
+                    aquí se levantan, detienen y bajan, se siguen sus logs en vivo
+                    y se previsualiza un archivo compose antes de tocar nada. En las
+                    otras pestañas, la columna{' '}
+                    <strong className="text-fg">Proyecto</strong> dice a cuál
+                    pertenece cada recurso.
+                  </TablaPestanas>
+
+                  <TablaPestanas icono={FileSearch} titulo="Previsualizar compose">
+                    Con <strong className="text-fg">Plan</strong> se indica la ruta
+                    de un archivo compose y se ve qué crearía: servicios, puertos,
+                    redes y volúmenes, distinguiendo lo que ya existe de lo que se
+                    crearía. <strong className="text-fg">No ejecuta nada</strong> ni
+                    modifica el archivo, y el editor permite probar un cambio a ver
+                    qué daría. Las operaciones reales van en la fila del proyecto.
+                    <br />
+                    <br />
+                    <strong className="text-fg">Seleccionar archivo</strong> abre un
+                    explorador para no tener que copiar la ruta a mano, que es como se
+                    acababa previsualizando el proyecto equivocado. Solo recorre tu
+                    directorio personal: los proyectos que no están en marcha no
+                    dejan etiquetas y no aparecen en la tabla, así que son justo los
+                    que hay que ir a buscar. El campo sigue siendo editable para los
+                    archivos que estén fuera.
                   </TablaPestanas>
                 </div>
               </>
@@ -242,6 +275,18 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                       Hub.
                     </span>
                   </li>
+                  <li className="flex gap-2.5">
+                    <Trash2 className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-px" />
+                    <span>
+                      <strong className="text-fg">Bajar un proyecto compose con
+                      sus volúmenes</strong>. Es la acción más destructiva del
+                      panel: borra los datos de todos sus volúmenes a la vez. No
+                      se activa por defecto, exige dos confirmaciones y el
+                      diálogo enseña los nombres reales de lo que desaparece. Si
+                      el proyecto tiene contenedores en marcha, el panel lo
+                      rechaza y hay que pararlo antes.
+                    </span>
+                  </li>
                 </ul>
 
                 <div
@@ -255,7 +300,10 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                   <code className="font-mono">host</code> y{' '}
                   <code className="font-mono">bridge</code>). Las redes
                   predefinidas <strong className="text-fg">no se tocan</strong> en
-                  la limpieza.
+                  la limpieza. En compose, bajar un proyecto{' '}
+                  <strong className="text-fg">nunca</strong> borra volúmenes
+                  salvo que se marque expresamente la opción: por defecto se lleva
+                  contenedores y red y deja los datos intactos.
                 </div>
               </>
             )}
@@ -267,8 +315,9 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                     Datos en vivo
                   </h3>
                   <p className="text-[13px] text-fg-muted mt-2">
-                    Logs, estadísticas y terminal no son peticiones normales: se
-                    mantienen abiertos por <strong className="text-fg">WebSocket</strong>.
+                    Logs, estadísticas, terminal y las acciones de compose no son
+                    peticiones normales: se mantienen abiertos por{' '}
+                    <strong className="text-fg">WebSocket</strong>.
                   </p>
                 </div>
                 <ul className="grid sm:grid-cols-2 gap-x-8 gap-y-4 text-[13px] text-fg-muted">
@@ -294,6 +343,17 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                       La terminal exige que el contenedor siga{' '}
                       <strong className="text-fg">en ejecución</strong>. Con el
                       contenedor detenido no hay shell a la que conectarse.
+                    </span>
+                  </li>
+                  <li className="flex gap-2.5">
+                    <Radio className="w-5 h-5 text-fg-subtle shrink-0 mt-px" />
+                    <span>
+                      Las acciones de compose enseñan el comando exacto antes de
+                      ejecutarlo y su salida en vivo, y se pueden{' '}
+                      <strong className="text-fg">cancelar</strong>: el proceso se
+                      detiene en el servidor y el proyecto se queda como estaba. Si
+                      compose falla, el panel lo dice como fallo de compose y no
+                      como error suyo: el comando llegó a ejecutarse.
                     </span>
                   </li>
                 </ul>
@@ -343,6 +403,37 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                       frontend; si no, ajusta{' '}
                       <code className="font-mono">FRONTEND_PORT</code> al arrancar el
                       backend.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h4 className="text-fg font-semibold text-[15px]">
+                      Los proyectos compose no se pueden operar
+                    </h4>
+                    <p className="leading-relaxed mt-0.5">
+                      Las acciones de la pestaña{' '}
+                      <strong className="text-fg">Proyectos</strong> y la
+                      previsualización necesitan el CLI de Docker Compose (
+                      <code className="font-mono">docker compose</code>). Si no está
+                      instalado, el panel lo avisa. El{' '}
+                      <strong className="text-fg">inventario</strong> de proyectos
+                      y la columna <em>Proyecto</em> del resto de pestañas siguen
+                      funcionando: se leen las etiquetas de los recursos, no el CLI.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h4 className="text-fg font-semibold text-[15px]">
+                      El explorador no deja subir ni salir del directorio inicial
+                    </h4>
+                    <p className="leading-relaxed mt-0.5">
+                      <strong className="text-fg">Seleccionar archivo</strong> solo
+                      recorre tu directorio personal, y la flecha de subir se apaga
+                      cuando ya estás en la raíz: es el límite, no un fallo. Si el
+                      archivo compose está en otro sitio, escribe la ruta en el campo,
+                      que sigue siendo editable. Los enlaces simbólicos que apuntan
+                      fuera del directorio personal no se listan, y el panel avisa de
+                      cuántos ha omitido.
                     </p>
                   </div>
 

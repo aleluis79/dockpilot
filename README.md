@@ -131,16 +131,49 @@ POST   /api/v1/networks/prune                 Limpiar redes sin uso
 GET    /api/v1/system/info                    Datos del host
 GET    /api/v1/system/df                      Consumo de disco por recurso
 GET    /api/v1/system/overview                Vista completa en una respuesta
+
+GET    /api/v1/compose/projects               Proyectos compose detectados por etiquetas
+GET    /api/v1/compose/projects/{name}        Servicios, redes y volúmenes del proyecto
+POST   /api/v1/compose/plan                   Previsualizar un archivo compose (no ejecuta nada)
 ```
 
-Cuatro canals viajan por WebSocket:
+Las acciones del ciclo de vida viajan por WebSocket y no por REST: son procesos
+con salida en vivo, no peticiones con respuesta.
+
+`POST /api/v1/compose/plan` es el primero que **invoca un proceso externo**: llama
+a `docker compose config` a través de `app/services/compose_cli.py`, el único
+módulo del backend con permiso para lanzar procesos. Resolver el plan con el CLI
+en vez de con un parser propio es deliberado: si el preview lo hiciera un parser
+propio, un día discreparía de lo que hace `up` y el preview mentiría. Si el
+comando no está instalado, responde `503` y **el inventario de proyectos sigue
+funcionando entero**, porque SPEC-11 no usa el CLI.
+
+Cinco canales viajan por WebSocket:
 
 ```text
 /ws/containers/{id}/logs        Logs en vivo
 /ws/containers/{id}/stats       Estadísticas en vivo
 /ws/containers/{id}/terminal    Terminal interactiva
 /ws/images/pull                 Progreso de la descarga de una imagen
+/ws/compose/{action}            Ciclo de vida de un proyecto compose
 ```
+
+`/ws/compose/{action}` acepta `up`, `stop`, `down`, `logs` y `pull`, con la acción
+validada contra esa lista cerrada. Estas acciones viajan por WebSocket y no por
+REST: son procesos con salida en vivo, no peticiones con respuesta. El comando se
+anuncia antes de ejecutarlo, su salida llega en vivo y se puede cancelar, y el
+proceso de compose muere en el servidor al cancelar o al cerrar la pestaña.
+
+`down --volumes` es la única acción irreversible, y está protegida por cuatro
+salvaguardas: nunca es el valor por defecto, exige confirmación en dos pasos con
+los nombres reales de los volúmenes a la vista, el servidor responde `409` si el
+proyecto tiene contenedores en marcha, y el botón destructivo no comparte aspecto
+con el de `down` normal.
+
+Un fallo de compose se reporta como `exit` con código distinto de cero, **no**
+como error del panel: el comando llegó a ejecutarse y fue compose el que no tuvo
+éxito. `error` queda para lo que impide ejecutar: ruta inválida, `409`, CLI
+ausente o `504`.
 
 ## Estructura
 

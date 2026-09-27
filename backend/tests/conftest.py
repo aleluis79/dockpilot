@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import asyncio
+from dataclasses import dataclass
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock
-from httpx import AsyncClient, ASGITransport
 from aiodocker.exceptions import DockerError
+from httpx import ASGITransport, AsyncClient
 
-from app.main import app
 from app.core.docker import get_docker
+from app.main import app
+from app.services.compose_cli import CHUNK
 from tests.fake_volumes import FakeDockerVolumes
 
 
@@ -72,6 +75,7 @@ class FakeDockerContainer:
         ports: list = None,
         mounts: list = None,
         networks: dict = None,
+        labels: dict | None = None,
     ):
         self.id = cid
         self._name = name
@@ -86,6 +90,10 @@ class FakeDockerContainer:
         # contenedor usa que red: `networks.list()` no trae ningun recuento
         # (SPEC-10 §3.1).
         self._networks = networks or {}
+        # Etiquetas del resumen. El daemon real SI las incluye en
+        # `/containers/json`; sin ellas no habria forma de saber a que proyecto
+        # compose pertenece un contenedor (SPEC-11 §3.1).
+        self._labels = labels or {}
 
     def _as_summary_dict(self):
         return {
@@ -97,6 +105,7 @@ class FakeDockerContainer:
             "Created": 1727290000,
             "Ports": self._ports,
             "Mounts": self._mounts,
+            "Labels": self._labels,
             "NetworkSettings": {"Networks": self._networks},
         }
 
@@ -613,7 +622,7 @@ async def _collect(agen):
 @pytest.fixture
 def mock_docker():
     mock = MagicMock()
-    
+
     # Setup mock containers repository
     c_running = FakeDockerContainer(
         cid="c123",
@@ -644,9 +653,9 @@ def mock_docker():
         state="exited",
         ports=[],
     )
-    
+
     containers_db = {"c123": c_running, "c456": c_exited}
-    
+
     async def fake_list(all=True, filters=None):
         res = []
         status_filter = None
@@ -792,6 +801,185 @@ async def async_client(mock_docker):
     app.dependency_overrides.clear()
 
 
+# --- Escenario de Docker Compose (SPEC-11) -------------------------------------
+#
+# Replica el host de referencia, con sus tres proyectos y los dos casos que
+# rompian una implementacion ingenua:
+#   - `elasticsearch-local`: vivo, 2 servicios, 1 red, 1 volumen.
+#   - `simp-sica` y `tickets-app`: SIN contenedores pero con volumenes, que es
+#     exactamente lo que `docker compose ls` no muestra (SPEC-11 §3.2).
+#   - un contenedor sin etiqueta de proyecto y un volumen con `Labels: None`.
+
+def _compose_labels(project: str, service: str = "", number: str = "1") -> dict:
+    labels = {
+        "com.docker.compose.project": project,
+        "com.docker.compose.version": "5.5.1",
+        "com.docker.compose.config-hash": f"hash-{project}",
+        "com.docker.compose.oneoff": "False",
+        "com.docker.compose.container-number": number,
+    }
+    if service:
+        labels["com.docker.compose.service"] = service
+        labels["com.docker.compose.image"] = f"sha256:{'a' * 8}{project}{service}"[:71]
+        labels["com.docker.compose.project.config_files"] = (
+            f"/home/usuario/proyectos/{project}/docker-compose.yml"
+        )
+        labels["com.docker.compose.project.working_dir"] = (
+            f"/home/usuario/proyectos/{project}"
+        )
+    return labels
+
+
+def _añadir_volumen(repo, name: str, labels, driver: str = "local") -> None:
+    repo.list_payload["Volumes"].append(
+        {
+            "Name": name,
+            "Driver": driver,
+            "Scope": "local",
+            "Mountpoint": f"/var/lib/docker/volumes/{name}/_data",
+            "CreatedAt": "2026-09-01T10:00:00-03:00",
+            "Labels": labels,
+            "Options": None,
+        }
+    )
+    repo.details[name] = {
+        **repo.list_payload["Volumes"][-1],
+        "Options": {},
+    }
+
+
+@pytest.fixture
+def mock_compose_docker(mock_docker):
+    """Extiende `mock_docker` con el escenario compose del host de referencia.
+
+    Los dobles de red y volumen son mutables y se leen por iteracion, asi que
+    basta con anadir entradas: `networks.list()` y `volumes.list()` las recogen
+    sin tocar el resto de tests.
+    """
+    # Proyecto vivo: dos servicios, como `elasticsearch` y `elasticvue`.
+    for cid, nombre, servicio in (
+        ("c901", "elasticsearch", "elasticsearch"),
+        ("c902", "elasticvue", "elasticvue"),
+    ):
+        mock_docker.containers_db[cid] = FakeDockerContainer(
+            cid=cid,
+            name=f"/{nombre}",
+            image="docker.elastic.co/elasticsearch/elasticsearch:9.1.3",
+            status="running",
+            state="running",
+            labels=_compose_labels("elasticsearch-local", servicio),
+        )
+
+    # Proyecto con el contenedor parado: NO es huerfano, tiene recursos vivos.
+    mock_docker.containers_db["c903"] = FakeDockerContainer(
+        cid="c903",
+        name="/web-stopped",
+        image="nginx:alpine",
+        status="exited",
+        state="exited",
+        labels=_compose_labels("tienda", "web"),
+    )
+
+    # Servicio con tres replicas: se agrupan bajo un mismo servicio.
+    for numero in ("1", "2", "3"):
+        cid = f"c91{numero}"
+        mock_docker.containers_db[cid] = FakeDockerContainer(
+            cid=cid,
+            name=f"/tienda-api-{numero}",
+            image="mi/api:1.0",
+            status="running" if numero != "3" else "exited",
+            state="running" if numero != "3" else "exited",
+            labels=_compose_labels("tienda", "api", numero),
+        )
+
+    # Contenedor sin etiqueta de proyecto: cuenta como `unlabelled_containers`.
+    mock_docker.containers_db["c999"] = FakeDockerContainer(
+        cid="c999",
+        name="/full-editor-db",
+        image="postgres:16",
+        status="exited",
+        state="exited",
+    )
+
+    # Red con nombre logico `elastic` y nombre real prefijado (SPEC-11 §3.2).
+    mock_docker.networks.networks["elasticsearch-local_elastic"] = {
+        "Name": "elasticsearch-local_elastic",
+        "Id": "net-elastic",
+        "Created": "2026-09-20T09:00:00.000000000-03:00",
+        "Scope": "local",
+        "Driver": "bridge",
+        "EnableIPv4": True,
+        "EnableIPv6": False,
+        "IPAM": {
+            "Driver": "default",
+            "Options": None,
+            "Config": [{"Subnet": "172.20.0.0/16", "Gateway": "172.20.0.1"}],
+        },
+        "Internal": False,
+        "Attachable": True,
+        "Ingress": False,
+        "ConfigFrom": {"Network": ""},
+        "ConfigOnly": False,
+        "Options": {},
+        "Labels": {
+            "com.docker.compose.project": "elasticsearch-local",
+            "com.docker.compose.network": "elastic",
+            "com.docker.compose.version": "5.5.1",
+        },
+    }
+
+    # Volumenes de los dos proyectos huerfanos: 3 + 4, sin un solo contenedor.
+    for nombre in ("postgres_data", "app_data", "cache"):
+        _añadir_volumen(
+            mock_docker.volumes,
+            f"simp-sica_{nombre}",
+            {
+                "com.docker.compose.project": "simp-sica",
+                "com.docker.compose.volume": nombre,
+                "com.docker.compose.version": "5.5.1",
+            },
+        )
+    for nombre in ("api-data", "api-db-data", "api-uploads", "keycloak-db-data"):
+        _añadir_volumen(
+            mock_docker.volumes,
+            f"tickets-app_{nombre}",
+            {
+                "com.docker.compose.project": "tickets-app",
+                "com.docker.compose.volume": nombre,
+                "com.docker.compose.version": "5.5.1",
+            },
+        )
+
+    # Volumen del proyecto vivo, con su nombre logico sin prefijo en la etiqueta.
+    _añadir_volumen(
+        mock_docker.volumes,
+        "elasticsearch-local_elasticsearch_data",
+        {
+            "com.docker.compose.project": "elasticsearch-local",
+            "com.docker.compose.volume": "elasticsearch_data",
+            "com.docker.compose.version": "5.5.1",
+        },
+    )
+
+    # Tiene etiquetas pero NO es de compose: no debe crear un proyecto (SPEC-11 §3.2).
+    _añadir_volumen(
+        mock_docker.volumes,
+        "aa342f746404c4a57823f40a9bccdc6cc78a2520701d2507f050b5aa5dcc9c09",
+        {"com.docker.volume.anonymous": ""},
+    )
+
+    return mock_docker
+
+
+@pytest_asyncio.fixture
+async def compose_client(mock_compose_docker):
+    app.dependency_overrides[get_docker] = lambda: mock_compose_docker
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+    app.dependency_overrides.clear()
+
+
 @pytest.fixture
 def test_client(mock_docker):
     from starlette.testclient import TestClient
@@ -799,3 +987,227 @@ def test_client(mock_docker):
     with TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()
+
+
+# --- SPEC-12: doble del proceso de compose ------------------------------------
+#
+# Sustituye el PUNTO DE INYECCIÓN (`compose_cli._spawn`), no el binario: los
+# tests no ejecutan `docker compose` nunca. El doble modela el contrato del
+# proceso que asyncio entrega, porque eso es justo lo que hay que probar (los
+# dos pipes por separado, `wait()` y `kill()`), no el binario de Docker.
+
+
+class FakePipe:
+    """Un pipe del proceso.
+
+    `read(n)` entrega los trozos que se le pidan, como un stream real. SPEC-12
+    lee el pipe entero de una vez y SPEC-13 lo lee por trozos, así que se
+    implementa el caso general y ambos modos funcionan.
+    """
+
+    def __init__(self, trozos: list[bytes] | bytes | None = None) -> None:
+        if isinstance(trozos, bytes):
+            self._trozos = [trozos] if trozos else []
+        else:
+            self._trozos = list(trozos or [])
+        self.peticiones = 0
+
+    async def read(self, n: int = CHUNK) -> bytes:
+        self.peticiones += 1
+        if not self._trozos:
+            return b""
+        if len(self._trozos) == 1:
+            return self._trozos.pop(0)
+        return self._trozos.pop(0)[:n]
+
+
+class PipeColgado(FakePipe):
+    """Un pipe que nunca entrega nada ni EOF: para probar la cancelación."""
+
+    async def read(self, n: int = CHUNK) -> bytes:
+        await asyncio.Event().wait()
+        return b""  # pragma: no cover - inalcanzable a propósito
+
+
+class PipeQueEmiteYNoTermina(FakePipe):
+    """Entrega sus trozos y luego se queda esperando para siempre.
+
+    Es lo que hace de verdad `logs --follow`: llegan líneas, el proceso no muere
+    y el EOF no llega nunca. Es el caso que justifica el botón «Cancelar».
+    """
+
+    async def read(self, n: int = CHUNK) -> bytes:
+        if self._trozos:
+            return self._trozos.pop(0)
+        await asyncio.Event().wait()
+        return b""  # pragma: no cover - inalcanzable a propósito
+
+
+class FakeProcess:
+    """Proceso falso con la misma superficie que `asyncio.subprocess.Process`.
+
+    Solo implementa lo que el runner usa: `stdout`, `stderr`, `wait()` y
+    `kill()`. Modelar el contrato del proceso, y no el binario de Docker, es lo
+    que permite probar la lógica sin ejecutar nada.
+    """
+
+    def __init__(
+        self,
+        *,
+        codigo: int = 0,
+        stdout: bytes = b"",
+        stderr: bytes = b"",
+        stdout_trozos: list[bytes] | None = None,
+        stderr_trozos: list[bytes] | None = None,
+        cuelga: bool = False,
+        cuelga_solo: str | None = None,
+        sin_kill: bool = False,
+    ) -> None:
+        self._codigo = codigo
+        self._cuelga = cuelga
+        self.sin_kill = sin_kill
+        self.returncode: int | None = None
+        self.killed = False
+        self.waited = False
+
+        # `cuelga` cuelga los dos pipes (SPEC-12, donde se leen enteros).
+        # `cuelga_solo` cuelga uno: es el caso de `logs --follow`, donde `stdout`
+        # entrega líneas pero nunca termina y `stderr` sí cierra.
+        if cuelga:
+            self.stdout = PipeColgado()
+            self.stderr = PipeColgado()
+        else:
+            self.stdout = self._pipe("stdout", cuelga_solo, stdout_trozos, stdout)
+            self.stderr = self._pipe("stderr", cuelga_solo, stderr_trozos, stderr)
+
+    @staticmethod
+    def _pipe(nombre, cuelga_solo, trozos, plano):
+        """Elige el tipo de pipe según lo que se le pida.
+
+        `cuelga_solo="<pipe>"` con trozos = emite y luego no termina (`--follow`).
+        `cuelga_solo="<pipe>"` sin trozos = no entrega nada (cancelación temprana).
+        """
+        solo = cuelga_solo == nombre
+        if solo and trozos:
+            return PipeQueEmiteYNoTermina(trozos)
+        if solo:
+            return PipeColgado()
+        return FakePipe(trozos if trozos is not None else plano)
+
+    async def wait(self) -> int:
+        if self._cuelga and not self.killed:
+            # Sin `kill()` un proceso colgado no termina nunca: es el caso que
+            # obliga al runner a tener un temporizador.
+            await asyncio.Event().wait()
+        self.waited = True
+        if self.killed:
+            self.returncode = -9
+        else:
+            self.returncode = self._codigo
+        return self.returncode
+
+    def kill(self) -> None:
+        if self.sin_kill:
+            return
+        self.killed = True
+
+
+@dataclass
+class SpawnCall:
+    """Una invocación registrada, para asertar sobre argumentos y entorno."""
+
+    args: list[str]
+    cwd: str
+    env: dict[str, str]
+
+
+class ManejadorSpawn:
+    """Programa la respuesta del proceso falso y expone lo registrado."""
+
+    def __init__(self) -> None:
+        self.calls: list[SpawnCall] = []
+        self.proceso: FakeProcess | None = None
+        self.error: Exception | None = None
+        self._por_defecto = True
+
+    def devolver(self, **kwargs) -> None:
+        self.proceso = FakeProcess(**kwargs)
+        self.error = None
+        self._por_defecto = False
+
+    def fallar_con(self, error: Exception) -> None:
+        self.error = error
+
+    @property
+    def ultima(self) -> SpawnCall:
+        return self.calls[-1]
+
+
+@pytest.fixture
+def fake_spawn(monkeypatch) -> ManejadorSpawn:
+    """Sustituye `compose_cli._crear_proceso` por un proceso falso.
+
+    Sin programar nada, responde con `{}` y código 0, que es lo que devuelve un
+    compose al que no le pasa nada. Nunca se ejecuta el binario real.
+    """
+    from app.services import compose_cli
+
+    manejador = ManejadorSpawn()
+    manejador.proceso = FakeProcess(stdout=b"{}")
+
+    async def _falso(args, cwd, env):
+        manejador.calls.append(SpawnCall(args=list(args), cwd=cwd, env=dict(env)))
+        if manejador.error is not None:
+            raise manejador.error
+        if manejador._por_defecto:
+            manejador.proceso = FakeProcess(stdout=b"{}")
+        return manejador.proceso
+
+    monkeypatch.setattr(compose_cli, "_crear_proceso", _falso)
+    return manejador
+
+
+@pytest.fixture
+def spawn_call(monkeypatch) -> list[dict]:
+    """Captura los argumentos reales con los que se crea el proceso.
+
+    Permite comprobar `stdin`, `stdout`, `stderr` y la ausencia de `shell`, que
+    son obligaciones del runner que el doble de proceso no puede observar.
+    """
+    from app.services import compose_cli
+
+    capturados: list[dict] = []
+
+    async def _falso(*args, **kwargs):
+        capturados.append({"args": list(args), **kwargs})
+        return FakeProcess(stdout=b"{}")
+
+    monkeypatch.setattr(compose_cli.asyncio, "create_subprocess_exec", _falso)
+    return capturados
+
+
+@pytest_asyncio.fixture
+async def plan_client(mock_docker):
+    """Cliente HTTP para el endpoint de previsualización.
+
+    El plan no necesita el daemon: el doble de compose es el que responde. Se
+    usa `mock_docker` igualmente porque el router completo se construye al
+    importar la app.
+    """
+    app.dependency_overrides[get_docker] = lambda: mock_docker
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def archivo(tmp_path):
+    """Un compose válido en disco.
+
+    Las rutas se validan **antes** de contactar con el CLI, así que cualquier test
+    que vaya al comando necesita un archivo real. Lo comparten SPEC-12 y SPEC-13.
+    """
+    ruta = tmp_path / "docker-compose.yml"
+    ruta.write_text("services:\n  web:\n    image: nginx:1.27\n")
+    return ruta

@@ -12,6 +12,7 @@ from app.schemas.volume import (
     VolumePruneResult,
     VolumeSummary,
 )
+from app.services.compose_service import compose_project_of
 from app.services.system_service import SystemService
 
 _HEX_DIGITS = set("0123456789abcdef")
@@ -112,6 +113,10 @@ class VolumeService:
                     ref_count=_as_int(usage_data.get("RefCount")),
                     is_anonymous=is_anonymous_volume(name),
                     labels=_clean_labels(entry.get("Labels")),
+                    # Proyecto compose al que pertenece, si la etiqueta existe
+                    # (SPEC-11). Aquí `Labels` puede venir `None`, de ahí el
+                    # helper en lugar de leer el dict directamente.
+                    compose_project=compose_project_of(entry.get("Labels")),
                 )
             )
         return summaries

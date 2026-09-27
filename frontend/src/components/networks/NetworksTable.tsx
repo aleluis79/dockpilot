@@ -2,6 +2,7 @@
 import React from 'react'
 import { Trash2, Network as NetworkIcon, Loader2 } from 'lucide-react'
 import type { NetworkSummary } from '../../types/network'
+import { ComposeBadge } from '../compose/ComposeBadge'
 
 interface NetworksTableProps {
   networks: NetworkSummary[]
@@ -42,6 +43,7 @@ export const NetworksTable: React.FC<NetworksTableProps> = ({
         <thead className="text-xs uppercase text-fg-subtle border-b border-default">
           <tr>
             <th className="text-left font-semibold px-4 py-2.5">Nombre</th>
+            <th className="text-left font-semibold px-4 py-2.5">Proyecto</th>
             <th className="text-left font-semibold px-4 py-2.5">Driver</th>
             <th className="text-left font-semibold px-4 py-2.5">Subred</th>
             <th className="text-left font-semibold px-4 py-2.5">Contenedores</th>
@@ -75,6 +77,9 @@ export const NetworksTable: React.FC<NetworksTableProps> = ({
                     interna
                   </span>
                 )}
+              </td>
+              <td className="px-4 py-2.5">
+                <ComposeBadge project={network.compose_project} />
               </td>
               <td className="px-4 py-2.5 font-mono text-fg-subtle text-xs">
                 {network.driver || '-'}

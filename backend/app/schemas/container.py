@@ -19,6 +19,10 @@ class ContainerSummary(BaseModel):
     state: str   # Raw Docker state string
     created: int # Epoch timestamp (seconds)
     ports: list[PortMapping] = Field(default_factory=list)
+    compose_project: str | None = Field(
+        None,
+        description="Proyecto Docker Compose al que pertenece, si la etiqueta existe (SPEC-11)",
+    )
 
 
 class ContainerDetail(ContainerSummary):

@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from 'react'
-import {
-  Search,
-  AlertCircle,
-  RefreshCw,
-  Container,
-  Layers,
-  HardDrive,
-  Network,
-} from 'lucide-react'
+import { Search, AlertCircle, RefreshCw } from 'lucide-react'
+import { VISTAS, type ClaveVista } from './vistas'
 import { useContainers } from './hooks/useContainers'
 import type { ContainerSummary } from './types/docker'
 import { Navbar } from './components/layout/Navbar'
@@ -22,6 +15,7 @@ import { TerminalModal } from './components/terminal/TerminalModal'
 import { ImagesView } from './components/images/ImagesView'
 import { VolumesView } from './components/volumes/VolumesView'
 import { NetworksView } from './components/networks/NetworksView'
+import { ProjectsView } from './components/compose/ProjectsView'
 import { SystemSummaryBar } from './components/system/SystemSummaryBar'
 import { HelpModal } from './components/help/HelpModal'
 import type { LocalImageSummary } from './types/image'
@@ -47,9 +41,7 @@ function App() {
   const [containerForStats, setContainerForStats] = useState<ContainerSummary | null>(null)
   const [containerForTerminal, setContainerForTerminal] = useState<ContainerSummary | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false)
-  const [activeView, setActiveView] = useState<
-    'containers' | 'images' | 'volumes' | 'networks'
-  >('containers')
+  const [activeView, setActiveView] = useState<ClaveVista>('containers')
   const [presetImage, setPresetImage] = useState<string>('')
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false)
 
@@ -98,16 +90,11 @@ function App() {
           </div>
         )}
 
-        {/* Conmutador de vista Contenedores / Imágenes */}
+        {/* Conmutador de vista. La lista vive en `src/vistas.ts` porque la ayuda
+            la recorre en sus tests: repetirla aquí era como se desfasó al
+            añadir `Proyectos`. */}
         <div className="flex items-center gap-1 p-1 bg-surface rounded-xl border border-default w-fit">
-          {(
-            [
-              { key: 'containers', label: 'Contenedores', icon: Container },
-              { key: 'images', label: 'Imágenes', icon: Layers },
-              { key: 'volumes', label: 'Volúmenes', icon: HardDrive },
-              { key: 'networks', label: 'Redes', icon: Network },
-            ] as const
-          ).map((view) => {
+          {VISTAS.map((view) => {
             const Icon = view.icon
             const active = activeView === view.key
             return (
@@ -128,7 +115,14 @@ function App() {
           })}
         </div>
 
-        {activeView === 'volumes' ? (
+        {activeView === 'projects' ? (
+          <ProjectsView
+            onNavigateTab={setActiveView}
+            /* Los contenedores del proyecto son los que cambiaron, así que la
+               lista de contenedores también se recarga. */
+            onRefrescar={refetch}
+          />
+        ) : activeView === 'volumes' ? (
           <VolumesView onDeleted={refetch} />
         ) : activeView === 'networks' ? (
           <NetworksView />

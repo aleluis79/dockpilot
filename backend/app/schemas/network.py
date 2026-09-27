@@ -24,6 +24,10 @@ class NetworkSummary(BaseModel):
         False,
         description="Red predefinida de Docker (none, host, bridge); no se puede borrar",
     )
+    compose_project: str | None = Field(
+        None,
+        description="Proyecto Docker Compose al que pertenece, si la etiqueta existe (SPEC-11)",
+    )
 
 
 class NetworkDetail(NetworkSummary):

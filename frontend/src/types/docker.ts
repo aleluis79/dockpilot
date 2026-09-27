@@ -16,6 +16,8 @@ export interface ContainerSummary {
   state: string;
   created: number;
   ports: PortMapping[];
+  /** Proyecto Docker Compose al que pertenece, si la etiqueta existe. */
+  compose_project?: string | null;
 }
 
 export interface ContainerDetail extends ContainerSummary {

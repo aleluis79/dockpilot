@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 from fastapi import APIRouter
 
+from app.api.v1.compose import router as compose_router
 from app.api.v1.containers import router as containers_router
 from app.api.v1.images import router as images_router
 from app.api.v1.networks import router as networks_router
@@ -13,3 +14,4 @@ api_router.include_router(images_router)
 api_router.include_router(volumes_router)
 api_router.include_router(system_router)
 api_router.include_router(networks_router)
+api_router.include_router(compose_router)

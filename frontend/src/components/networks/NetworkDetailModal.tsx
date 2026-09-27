@@ -52,15 +52,15 @@ export const NetworkDetailModal: React.FC<NetworkDetailModalProps> = ({ name, on
   return (
     <div className={MODAL_OVERLAY} onClick={onClose}>
       <div
-        className="bg-card border border-default rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl"
+        className="bg-surface border border-default rounded-lg w-full max-w-2xl max-h-[85vh] overflow-y-auto shadow-xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label={`Detalle de la red ${name}`}
       >
-        <div className="flex items-center justify-between p-4 border-b border-default sticky top-0 bg-card z-10">
+        <div className="flex items-center justify-between p-4 border-b border-default sticky top-0 bg-surface z-10">
           <div className="flex items-center gap-2 min-w-0">
-            <NetworkIcon className="w-4.5 h-4.5 text-accent shrink-0" />
+            <NetworkIcon className="w-4.5 h-4.5 text-blue-600 dark:text-blue-400 shrink-0" />
             <h3 className="text-sm font-semibold text-fg font-mono truncate">{name}</h3>
             {detail?.is_builtin && (
               <span className="px-1.5 py-0.5 text-[10px] uppercase rounded bg-elevated text-fg-subtle border border-default shrink-0">

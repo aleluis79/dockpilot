@@ -21,6 +21,18 @@ class Settings(BaseSettings):
     # como JSON, no como texto separado por comas.
     CORS_ORIGINS: list[str] | None = None
 
+    # Raíz del explorador de archivos compose (SPEC-14). None significa el home
+    # del usuario, que es lo más arriba que tiene sentido para un panel local: los
+    # proyectos están ahí y salir de ahí no aporta nada. Se resuelve con
+    # `os.path.expanduser` y no con un literal, porque el backend puede correr en
+    # un contenedor o con otro usuario del host.
+    COMPOSE_BROWSE_ROOT: str | None = None
+
+    # Máximo de entradas por listado. Un directorio del home puede tener decenas de
+    # miles de ficheros; sin tope la respuesta crece sin control. El truncado se
+    # comunica en la respuesta en lugar de ocurrir en silencio.
+    COMPOSE_BROWSE_MAX: int = 500
+
     model_config = SettingsConfigDict(case_sensitive=True)
 
     @model_validator(mode="after")

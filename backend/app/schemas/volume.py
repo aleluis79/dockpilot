@@ -16,6 +16,10 @@ class VolumeSummary(BaseModel):
         False, description="True si el nombre es un hash de 64 hex"
     )
     labels: dict[str, str] = Field(default_factory=dict)
+    compose_project: str | None = Field(
+        None,
+        description="Proyecto Docker Compose al que pertenece, si la etiqueta existe (SPEC-11)",
+    )
 
 
 class VolumeDetail(VolumeSummary):

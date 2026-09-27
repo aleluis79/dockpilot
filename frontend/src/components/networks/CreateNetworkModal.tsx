@@ -57,7 +57,7 @@ export const CreateNetworkModal: React.FC<CreateNetworkModalProps> = ({
   return (
     <div className={MODAL_OVERLAY} onClick={onClose}>
       <div
-        className="bg-card border border-default rounded-lg w-full max-w-md shadow-xl"
+        className="bg-surface border border-default rounded-lg w-full max-w-md shadow-xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -65,7 +65,7 @@ export const CreateNetworkModal: React.FC<CreateNetworkModalProps> = ({
       >
         <div className="flex items-center justify-between p-4 border-b border-default">
           <div className="flex items-center gap-2">
-            <NetworkIcon className="w-4.5 h-4.5 text-accent" />
+            <NetworkIcon className="w-4.5 h-4.5 text-blue-600 dark:text-blue-400" />
             <h3 className="text-sm font-semibold text-fg">Crear red</h3>
           </div>
           <button
@@ -91,7 +91,7 @@ export const CreateNetworkModal: React.FC<CreateNetworkModalProps> = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="mi-red"
-              className="w-full px-2.5 py-1.5 text-sm rounded bg-elevated text-fg border border-default focus:border-accent outline-none font-mono"
+              className="w-full px-2.5 py-1.5 text-sm rounded bg-elevated text-fg border border-default focus:border-blue-500/50 outline-none font-mono"
             />
           </div>
 
@@ -107,7 +107,7 @@ export const CreateNetworkModal: React.FC<CreateNetworkModalProps> = ({
               value={subnet}
               onChange={(e) => setSubnet(e.target.value)}
               placeholder="172.20.0.0/16"
-              className="w-full px-2.5 py-1.5 text-sm rounded bg-elevated text-fg border border-default focus:border-accent outline-none font-mono"
+              className="w-full px-2.5 py-1.5 text-sm rounded bg-elevated text-fg border border-default focus:border-blue-500/50 outline-none font-mono"
             />
             <p className="text-[11px] text-fg-subtle mt-1">
               Opcional. Si se omite, Docker asigna la siguiente subred libre, que es lo
@@ -128,7 +128,7 @@ export const CreateNetworkModal: React.FC<CreateNetworkModalProps> = ({
               onChange={(e) => setGateway(e.target.value)}
               placeholder="172.20.0.1"
               disabled={!subnet.trim()}
-              className="w-full px-2.5 py-1.5 text-sm rounded bg-elevated text-fg border border-default focus:border-accent outline-none font-mono disabled:opacity-50"
+              className="w-full px-2.5 py-1.5 text-sm rounded bg-elevated text-fg border border-default focus:border-blue-500/50 outline-none font-mono disabled:opacity-50"
             />
           </div>
 
@@ -160,7 +160,7 @@ export const CreateNetworkModal: React.FC<CreateNetworkModalProps> = ({
             <button
               type="submit"
               disabled={saving}
-              className="px-3 py-1.5 text-sm rounded bg-accent text-white hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-1.5"
+              className="px-3 py-1.5 text-sm rounded bg-blue-600 text-white hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-1.5"
             >
               {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
               Crear

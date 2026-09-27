@@ -45,7 +45,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-elevated border border-border text-xs text-fg-muted">
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-elevated border border-default text-xs text-fg-muted">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             <span className="font-mono">/var/run/docker.sock</span>
             <span className="text-emerald-700 dark:text-emerald-400 font-medium">Conectado</span>

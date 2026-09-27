@@ -109,4 +109,23 @@ describe('ContainersTable', () => {
 
     expect(handleOpenTerminal).toHaveBeenCalledWith(mockContainers[0])
   })
+
+  it('muestra la insignia de proyecto compose solo en las filas que lo tienen', () => {
+    render(
+      <ContainersTable
+        containers={[
+          { ...mockContainers[0], compose_project: 'tickets-app' },
+          mockContainers[1],
+        ]}
+        loading={false}
+        onAction={vi.fn()}
+        onSelect={vi.fn()}
+      />
+    )
+
+    const insignias = screen.getAllByTestId('compose-badge')
+    // Una columna `Proyecto` vacía en el resto de filas sería ruido.
+    expect(insignias).toHaveLength(1)
+    expect(insignias[0]).toHaveTextContent('tickets-app')
+  })
 })

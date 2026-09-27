@@ -148,7 +148,7 @@ export const NetworksView: React.FC = () => {
               aria-pressed={filter === f.value}
               className={`px-2.5 py-1 text-xs rounded transition-colors ${
                 filter === f.value
-                  ? 'bg-accent text-white'
+                  ? 'bg-blue-600 text-white'
                   : 'bg-elevated text-fg-subtle hover:text-fg'
               }`}
             >
@@ -206,7 +206,7 @@ export const NetworksView: React.FC = () => {
       {networkToDelete && (
         <div className={MODAL_OVERLAY} onClick={() => setNetworkToDelete(null)}>
           <div
-            className="bg-card border border-default rounded-lg w-full max-w-md p-4 shadow-xl"
+            className="bg-surface border border-default rounded-lg w-full max-w-md p-4 shadow-xl"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -246,7 +246,7 @@ export const NetworksView: React.FC = () => {
       {pruneOpen && (
         <div className={MODAL_OVERLAY} onClick={() => setPruneOpen(false)}>
           <div
-            className="bg-card border border-default rounded-lg w-full max-w-md p-4 shadow-xl"
+            className="bg-surface border border-default rounded-lg w-full max-w-md p-4 shadow-xl"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"

@@ -56,6 +56,53 @@ Todo desarrollo en DockPilot sigue rigurosamente el ciclo SDD de 5 etapas:
 - **Superficies no HTML** (xterm.js, barras de scroll) leen los tokens por JavaScript o por variables CSS, nunca por hexadecimales fijos.
 - Especificación completa en `specs/06-theme-switcher.md`.
 
+### Docker Compose (SPEC-11 a SPEC-14)
+- **El Engine API no tiene noción de proyecto compose.** Un proyecto existe únicamente como convención de etiquetas `com.docker.compose.*` sobre contenedores, redes y volúmenes. `docker compose ls` **no sirve** para inventariar: en el host de referencia devuelve un solo proyecto y omite los huérfanos, que son justo los que hay que detectar.
+- **SPEC-11 es solo lectura y no necesita el CLI de compose.** Se apoya solo en etiquetas, así que el inventario funciona entero aunque `docker compose` no esté instalado.
+
+#### `GET /api/v1/compose/browse`: el explorador está confinado (SPEC-14)
+El explorador de archivos existe porque la ruta había que copiarla a mano, y eso acababa en previsualizar el proyecto equivocado: en el host de referencia hay 4 compose files y el inventario solo conoce 1, porque los otros tres no están en marcha y no dejan etiquetas.
+
+Tres reglas que **no se pueden relajar** sin romper el modelo de seguridad:
+
+1. **El confinamiento se comprueba sobre la ruta ya resuelta.** `Path(path).resolve()` y luego `raiz in objetivo.parents`. Nunca `str.startswith()`: sin separador acepta `/home/alejandro` para una raíz `/home/al`, y con separador rechaza todo cuando la raíz es `/` porque buscaría `//`. Un enlace simbólico a `~/.ssh` colado en el home pasa cualquier comparación de texto, y `resolve()` es lo único que lo para.
+2. **Solo se devuelven nombres, tipos y tamaños. Nunca contenido.** Leer el archivo es de `build_plan` (SPEC-12), con su límite de tamaño y su validación. Una segunda vía de lectura sería superficie que nadie pidió.
+3. **Sin `path` se devuelve la raíz, y la raíz la dice el backend.** El cliente no puede deducirla: `~` apunta al home del usuario del **backend**, no al del navegador. Si el cliente calculara la raíz por su cuenta, la regla de confinamiento estaría en dos sitios y tarde o temprano discreparían.
+
+`path` **relativa** da `400`, fuera de la raíz da `403`, y el `403` usa el mismo mensaje exista o no el destino: si se distinguieran, el endpoint serviría para mapear el disco probando rutas y leyendo códigos de respuesta.
+
+#### `app/services/compose_cli.py`: el único módulo que lanza procesos
+El backend **dejó de ser cliente puro del Engine API** en SPEC-12. A partir de ahí este módulo es el **único** sitio con permiso para invocar procesos externos, y SPEC-13 solo le añade un modo de streaming. Si alguna vez hace falta otro proceso, se añade aquí y en ningún otro sitio.
+
+Se llama al CLI y **no se parsea el YAML en Python** porque la utilidad de un preview es ser fiel: un parser propio tendría que replicar la interpolación de variables, `extends`, `profiles`, `include` y la precedencia de `env_file`, y el día que se le escapara uno el preview mentiría. `docker compose config` es el propio compose diciendo qué interpretó, así que el preview y el `up` de SPEC-13 no pueden discrepar.
+
+Cinco obligaciones, implementadas y con test:
+
+| Obligación | Dónde |
+| :--- | :--- |
+| Lista de argumentos, **nunca** `shell=True` | `argumentos_config()` + `_crear_proceso()` |
+| `PATH` reducido a una lista conocida | `KNOWN_PATH` |
+| `COMPOSE_*` y `DOCKER_*` limpias del entorno hijo | `_entlimpio()` |
+| `stdin=DEVNULL` | `_crear_proceso()` |
+| Proceso muerto en **todos** los caminos de salida | `_matar()` (síncrono) + `_terminar()` |
+
+SPEC-13 amplía el runner con un **modo streaming** sobre el mismo núcleo, no un segundo camino. Cuatro cosas que no son evidentes:
+
+- **El servicio va como argumento POSICIONAL.** Compose v2 no tiene `--service` (`unknown flag: --service`); `stop`, `logs` y `pull` lo toman posicional. Y a diferencia del preview, las acciones **no** llevan `--profile`: un `up` debe arrancar el perfil por defecto, no todos.
+- **`_matar()` es síncrono a propósito.** Dentro del `finally` de una tarea que se cancela, cualquier `await` puede volver a lanzar `CancelledError` y saltarse el resto de la limpieza. Con un `_terminar()` que hace `await`, el `docker compose` **sobrevivía** a la cancelación.
+- **Cancelar es cancelar la tarea consumidora, no `aclose()`.** Un generador asíncrono que ya está leyendo no se puede cerrar por fuera: lanza `asynchronous generator is already running`.
+- **`logs --follow` no termina nunca**: emite líneas y el EOF no llega. El doble de `tests/conftest.py` modela eso con `PipeQueEmiteYNoTermina`, y es el caso que justifica el botón «Cancelar».
+
+**Un fallo de compose no es un fallo del panel.** Un `up` que muere porque el puerto está ocupado es `exit` con `code != 0`, no un mensaje `error`. `error` queda para lo que impide ejecutar (ruta inválida, `409`, CLI ausente, `504`).
+
+**Trampa de `docker compose config`: excluye los servicios con `profiles`** salvo que se activen. Por eso los argumentos llevan siempre `--profile '*'`: sin él, un proyecto con un servicio `profiles: [dev]` devuelve un plan con un servicio menos **sin avisar**. Otras tres rarezas de su salida, todas en SPEC-12 §3.2: `networks` y `volumes` de la raíz son **mapas** (clave = nombre lógico, valor = nombre real prefijado), `networks` de un servicio también es un mapa con valor `null`, y `published` de un puerto es una **cadena**.
+
+**`stderr` con código de salida 0 son avisos, no errores.** Compose valida el archivo y aun así avisa de una variable sin definir. Por eso `ejecutar_config()` devuelve `stderr` siempre, y `build_plan()` lo expone en `warnings`.
+
+**Trampa de aiodocker**: `containers.list()` devuelve objetos `DockerContainer`, no dicts, y las etiquetas viven en `_container`. Sin desenvolverlo el inventario sale vacío **sin dar ningún error**. Ver SPEC-11 §3.6.
+**Trampa del daemon**: `/volumes` devuelve `Labels: null` donde `/networks` y `/containers/json` devuelven `{}`. Normalizar con `_labels()` antes de leer.
+**SPEC-13 reutiliza este runner** y no abre un segundo camino de ejecución. El canal es **uno solo** (`/ws/compose/{action}`, con la acción validada contra una lista cerrada) y no cinco: cinco handlers casi idénticos serían cinco sitios donde olvidar el `finally` que mata el proceso.
+
 ### Backend
 - **Framework**: FastAPI (Python 3.12+).
 - **Servidor ASGI**: Uvicorn con soporte `uvloop`.
@@ -83,22 +130,28 @@ dockpilot/
 │   ├── 07-images-management.md  # Spec: Gestión de imágenes (pull, inspect, delete)
 │   ├── 08-volumes-management.md # Spec: Volúmenes (listado, detalle, prune)
 │   ├── 09-system-overview.md    # Spec: Resumen del host y consumo de disco
-│   └── 10-networks-management.md # Spec: Redes Docker (alta, detalle, prune)
+│   ├── 10-networks-management.md # Spec: Redes Docker (alta, detalle, prune)
+│   ├── 11-compose-inventory.md  # Spec: Inventario de proyectos compose (solo lectura, por labels)
+│   ├── 12-compose-plan.md       # Spec: Lectura y previsualización de archivos compose (1er subprocess)
+│   ├── 13-compose-lifecycle.md  # Spec: Ciclo de vida de proyectos compose (up/stop/down/pull/logs)
+│   └── 14-compose-file-browser.md # Spec: Explorador de archivos compose (elegir ruta sin copiarla)
 ├── backend/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── v1/
+│   │   │   │   ├── compose.py      # REST de compose: /projects, /projects/{name}, POST /plan, GET /browse
+│   │   │   │   ├── ws.py           # + /ws/compose/{action} (SPEC-13)
 │   │   │   │   ├── containers.py   # REST de contenedores + /{id}/stats
 │   │   │   │   ├── images.py       # REST de imágenes: local, search, detalle, borrado
 │   │   │   │   ├── networks.py     # REST de redes: listado, detalle, alta, prune, borrado
 │   │   │   │   ├── system.py       # REST de sistema: /info, /df, /overview
 │   │   │   │   ├── volumes.py      # REST de volúmenes: listado, detalle, prune, borrado
-│   │   │   │   └── ws.py           # WebSocket: /logs, /stats, /terminal, /images/pull
 │   │   │   └── router.py
 │   │   ├── core/
 │   │   │   ├── config.py
 │   │   │   └── docker.py
 │   │   ├── schemas/
+│   │   │   ├── compose.py
 │   │   │   ├── container.py
 │   │   │   ├── image.py
 │   │   │   ├── log.py
@@ -108,6 +161,8 @@ dockpilot/
 │   │   │   ├── terminal.py
 │   │   │   └── volume.py
 │   │   ├── services/
+│   │   │   ├── compose_cli.py      # ÚNICO módulo que lanza procesos (SPEC-12)
+│   │   │   ├── compose_service.py  # Inventario por labels (SPEC-11) y build_plan (SPEC-12)
 │   │   │   ├── container_service.py
 │   │   │   ├── image_service.py
 │   │   │   ├── network_service.py
@@ -116,14 +171,15 @@ dockpilot/
 │   │   │   └── volume_service.py
 │   │   └── main.py
 │   ├── tests/
-│   │   ├── conftest.py            # Fakes de aiodocker (contenedores, exec, stats)
+│   │   ├── conftest.py            # Fakes de aiodocker (contenedores, exec, stats, compose)
 │   │   ├── fake_volumes.py        # Doble de aiodocker.volumes (devuelve dict, no lista)
 │   │   ├── test_containers.py
 │   │   ├── test_create_container.py
 │   │   ├── test_image_reference.py
 │   │   ├── test_images.py
-│   ├── test_networks.py
-│   ├── test_system.py
+│   │   ├── test_compose.py
+│   │   ├── test_networks.py
+│   │   ├── test_system.py
 │   │   ├── test_images_search.py
 │   │   ├── test_stats.py
 │   │   ├── test_system_df.py
@@ -136,25 +192,37 @@ dockpilot/
 ├── frontend/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── layout/            # Navbar, ThemeToggle
-│   │   │   ├── ui/                # StatusBadge
+│   │   │   ├── layout/            # Navbar, ThemeProvider, ThemeToggle
+│   │   │   ├── ui/                # StatusBadge, modalOverlay (velo compartido)
 │   │   │   ├── containers/        # Tabla, acciones y modales de contenedor
 │   │   │   ├── terminal/          # TerminalModal, TerminalViewer, temas de xterm
 │   │   │   ├── logs/              # LogsModal, LogsViewer
 │   │   │   ├── stats/             # StatsModal, StatsSparkline
 │   │   │   ├── images/            # ImagesView, ImagesTable, PullImageModal, ImageDetailModal
-│   │   │   └── volumes/           # VolumesView, VolumesTable, VolumeDetailModal
-│   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats, useTheme, useImagePull
-│   │   ├── services/              # dockerApi.ts
-│   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts, volume.ts
-│   │   ├── utils/                 # format.ts (formatBytes, formatPercent)
+│   │   │   ├── volumes/           # VolumesView, VolumesTable, VolumeDetailModal
+│   │   │   ├── networks/          # NetworksView, NetworksTable, CreateNetworkModal, NetworkDetailModal
+│   │   │   ├── system/            # SystemSummaryBar, SystemDetailPanel
+│   │   │   ├── compose/           # ProjectsView, ProjectsTable, ProjectDetailModal, ComposeBadge,
+│   │   │   │                     # ComposePlanModal, ComposeEditor, ComposeActionPanel,
+│   │   │   │                     # ComposeDownDialog, ComposeLogsViewer, ComposeFilePicker
+│   │   │   └── help/              # HelpModal
+│   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats, useTheme, useImagePull,
+│   │   │                         # useNetworks, useSystemOverview, useComposeProjects, useComposeCommand
+│   │   ├── services/              # dockerApi.ts, wsUrl.ts
+│   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts, volume.ts, network.ts, system.ts, compose.ts
+│   │   ├── utils/                 # format.ts (formatBytes, formatPercent), compose.ts (rutaDeProyecto)
 │   │   ├── App.tsx
 │   │   ├── main.tsx
 │   │   └── index.css              # Tokens de tema (@theme inline + @custom-variant dark)
 │   ├── tests/
 │   │   ├── setup.ts
+│   │   ├── theme-tokens.test.ts   # Arquitectura: prohibe `zinc-*` y tokens no declarados
+│   │   ├── ports.test.ts
 │   │   ├── components/
-│   │   └── hooks/
+│   │   │   └── compose/           # ProjectsView, ProjectsTable, ProjectDetailModal, ComposeBadge,
+│   │   │                         # ComposeFilePicker, ComposeLogsViewer, composeActions
+│   │   ├── hooks/
+│   │   └── services/
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── vitest.config.ts
@@ -171,6 +239,7 @@ dockpilot/
 ### 5.2. Frontend Testing (`vitest` + `@testing-library/react`)
 - **Pruebas de Componentes**: Renderizado según datos de la API y manejo de eventos de usuario (clicks, confirmaciones).
 - **Pruebas de Hooks**: Flujo de estados (loading, data, error) y gestión de ciclo de vida de WebSockets.
+- **Test de arquitectura de tokens** (`tests/theme-tokens.test.ts`): además de prohibir las paletas neutras literales, **verifica que toda clase de color use un token declarado en `index.css`**. En Tailwind v4 una utilidad cuyo color no está en `@theme` no se genera y la clase queda muerta sin avisar.
 
 ---
 

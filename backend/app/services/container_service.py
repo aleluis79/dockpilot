@@ -17,6 +17,7 @@ from app.schemas.container import (
     PortMapping,
 )
 from app.schemas.log import LogEntry, LogSnapshotResponse
+from app.services.compose_service import compose_project_of
 
 
 def _get_container_dict(c: Any) -> dict:
@@ -106,6 +107,9 @@ class ContainerService:
                         state=status_str,
                         created=_parse_created_timestamp(info.get("Created")),
                         ports=_parse_port_mappings(info.get("Ports", [])),
+                        # Proyecto compose al que pertenece, si la etiqueta existe
+                        # (SPEC-11). `None` en un contenedor normal.
+                        compose_project=compose_project_of(info.get("Labels")),
                     )
                 )
             return summaries

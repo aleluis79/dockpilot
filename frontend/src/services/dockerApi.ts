@@ -39,6 +39,13 @@ import type {
   NetworkPruneResult,
   NetworkSummary,
 } from '../types/network'
+import type {
+  BrowseResult,
+  ComposeOverview,
+  ComposePlan,
+  ComposePlanRequest,
+  ComposeProjectDetail,
+} from '../types/compose'
 import type { DiskUsage, SystemInfo, SystemOverview } from '../types/system'
 import type {
   VolumeDeleteResponse,
@@ -256,5 +263,39 @@ export const dockerApi = {
     const params = new URLSearchParams({ term, limit: String(limit) })
     const res = await fetch(`${BASE_URL}/images/search?${params.toString()}`)
     return handleResponse<ImageSearchResult[]>(res)
+  },
+
+  async listComposeProjects(): Promise<ComposeOverview> {
+    const res = await fetch(`${BASE_URL}/compose/projects`)
+    return handleResponse<ComposeOverview>(res)
+  },
+
+  async planCompose(payload: ComposePlanRequest): Promise<ComposePlan> {
+    const res = await fetch(`${BASE_URL}/compose/plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    return handleResponse<ComposePlan>(res)
+  },
+
+  /**
+   * Sin `path` pide la raíz: el cliente no puede deducirla, porque `~` apunta al
+   * home del usuario del backend y no al del navegador.
+   */
+  async browseComposeFiles(path?: string): Promise<BrowseResult> {
+    // La ruta va en la query y por tanto necesita codificarse: una con espacios o
+    // con `&` rompería la URL y el backend leería otra cosa.
+    const query = path ? `?path=${encodeURIComponent(path)}` : ''
+    const res = await fetch(`${BASE_URL}/compose/browse${query}`)
+    return handleResponse<BrowseResult>(res)
+  },
+
+  async getComposeProject(name: string): Promise<ComposeProjectDetail> {
+    // Un nombre de proyecto puede llevar barra o espacio: sin `encodeURIComponent`
+    // la petición apunta a otra ruta y el 404 dice "no existe" en vez de "mal
+    // formado".
+    const res = await fetch(`${BASE_URL}/compose/projects/${encodeURIComponent(name)}`)
+    return handleResponse<ComposeProjectDetail>(res)
   },
 }

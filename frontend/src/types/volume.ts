@@ -9,6 +9,8 @@ export interface VolumeSummary {
   ref_count: number;
   is_anonymous: boolean;
   labels: Record<string, string>;
+  /** Proyecto Docker Compose al que pertenece, si la etiqueta existe. */
+  compose_project?: string | null;
 }
 
 export interface VolumeDetail extends VolumeSummary {

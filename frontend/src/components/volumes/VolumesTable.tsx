@@ -3,6 +3,7 @@ import React from 'react'
 import { Box, RefreshCw, AlertCircle, Info, Trash2, HardDrive } from 'lucide-react'
 import { formatBytes } from '../../utils/format'
 import type { VolumeSummary } from '../../types/volume'
+import { ComposeBadge } from '../compose/ComposeBadge'
 
 interface VolumesTableProps {
   volumes: VolumeSummary[]
@@ -76,6 +77,7 @@ export const VolumesTable: React.FC<VolumesTableProps> = ({
         <thead className="bg-surface/80 text-xs uppercase tracking-wider text-fg-subtle border-b border-default">
           <tr>
             <th className="py-3.5 px-4 font-semibold">Volumen</th>
+            <th className="py-3.5 px-4 font-semibold">Proyecto</th>
             <th className="py-3.5 px-4 font-semibold">Tamaño</th>
             <th className="py-3.5 px-4 font-semibold">Creado</th>
             <th className="py-3.5 px-4 font-semibold">Uso</th>
@@ -109,6 +111,9 @@ export const VolumesTable: React.FC<VolumesTableProps> = ({
                     {volume.mountpoint}
                   </span>
                 </div>
+              </td>
+              <td className="py-3.5 px-4">
+                <ComposeBadge project={volume.compose_project} />
               </td>
               <td className="py-3.5 px-4 font-mono text-xs tabular-nums">
                 {formatBytes(volume.size)}

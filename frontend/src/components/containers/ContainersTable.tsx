@@ -3,6 +3,7 @@ import React from 'react'
 import { Box, ExternalLink, RefreshCw } from 'lucide-react'
 import type { ContainerSummary } from '../../types/docker'
 import { StatusBadge } from '../ui/StatusBadge'
+import { ComposeBadge } from '../compose/ComposeBadge'
 import { ActionButtons } from './ActionButtons'
 
 interface ContainersTableProps {
@@ -57,6 +58,7 @@ export const ContainersTable: React.FC<ContainersTableProps> = ({
         <thead className="bg-surface/80 text-xs uppercase tracking-wider text-fg-muted border-b border-default">
           <tr>
             <th className="py-3.5 px-4 font-semibold">Contenedor</th>
+            <th className="py-3.5 px-4 font-semibold">Proyecto</th>
             <th className="py-3.5 px-4 font-semibold">Imagen</th>
             <th className="py-3.5 px-4 font-semibold">Estado</th>
             <th className="py-3.5 px-4 font-semibold">Puertos</th>
@@ -77,6 +79,9 @@ export const ContainersTable: React.FC<ContainersTableProps> = ({
                   </span>
                   <span className="font-mono text-xs text-fg-muted">{c.id.slice(0, 12)}</span>
                 </div>
+              </td>
+              <td className="py-3.5 px-4">
+                <ComposeBadge project={c.compose_project} />
               </td>
               <td className="py-3.5 px-4">
                 <span className="font-mono text-xs text-fg-muted bg-elevated/60 px-2 py-0.5 rounded border border-strong/40">
