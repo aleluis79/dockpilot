@@ -191,8 +191,10 @@ Se ofrecen los tres porque la franja de resumen necesita lo esencial de forma r�
 
 - **Franja de resumen**: una fila compacta, siempre visible, con Docker + versión, SO, nº de núcleos, RAM total y el espacio total en disco. Si el daemon no responde, la franja lo dice explícitamente en lugar de mostrar ceros, porque "0 imágenes" y "no pude preguntar" son cosas muy distintas.
 - **Panel de detalle**: al desplegar la franja, una tabla con total / en uso / recuperable por tipo (imágenes, contenedores, volúmenes, caché de build), las mayores imágenes y los mayores volúmenes, y la ruta de la raíz de Docker.
-- **Enlaces a la limpieza**: cada cifra recuperable enlaza a la pestaña correspondiente (Imágenes o Volúmenes). Esta spec **no** ejecuta la limpieza, solo lleva allí.
-- Los datos se solicitan al montar y se pueden refrescar con un botón, sin sondeo automático: el consumo en disco cambia despacio y no justifica un temporizador.
+- **Enlaces a la limpieza**: cada cifra recuperable enlaza a la pestaña correspondiente (Imágenes o Volúmenes). Esta spec **no** ejecuta la limpieza, solo lleva allí. El enlace **solo cambia de pestaña**: no pre-filtra ni amplía los filtros de esas vistas.
+- **Porcentaje recuperable**: cada cifra recuperable se acompaña de su porcentaje sobre el total de ese mismo tipo de recurso, para que se entienda de un vistazo si el problema es grave ("1 GB de 5 GB") o marginal ("1 MB de 20 GB"). El porcentaje se calcula en el frontend a partir de `reclaimable` y `total_size`, que el backend ya entrega; no requiere cambios de contrato.
+- Los datos se solicitan al montar y se pueden refrescar con un botón, sin sondeo automático: el consumo en disco cambia despacio y no justifica un temporizador. El botón de refresco **también aparece en el estado de error**, para que un fallo al cargar sea recuperable sin recargar la página. Refrescar no vacía la franja: la deja visible con el botón en estado de carga, en lugar de sustituirla por un mensaje de espera.
+- `SystemDetailPanel` **recibe el resumen por prop** desde `SystemSummaryBar` y no vuelve a pedirlo: abrir y cerrar el panel no genera tráfico al daemon.
 
 ### 3.5 Notas de aiodocker 0.27.0 (verificadas)
 
@@ -272,16 +274,28 @@ Característica: Resumen del host y consumo de disco
   - `test_overview_is_consistent_with_separate_endpoints`: `overview` concuerda con `info` y `df` solicitados por separado.
 
 ### Frontend (`vitest` + `@testing-library/react`)
-- `tests/components/SystemSummaryBar.test.tsx`: muestra versión, núcleos y RAM; formatea el espacio; y cuando la API falla muestra un estado de "no conectado" en lugar de ceros.
+- `tests/components/SystemSummaryBar.test.tsx`: muestra versión, núcleos y RAM; formatea el espacio; y cuando la API falla muestra un estado de "no conectado" en lugar de ceros. Además: el botón de refresco vuelve a pedir el resumen, y **el estado de error también lo ofrece**, porque sin él un fallo de red al cargar deja la franja bloqueada hasta recargar la página a mano.
 - `tests/components/SystemDetailPanel.test.tsx`: desglose por tipo, porcentaje recuperable, mayores consumidores y los enlaces a las vistas de Imágenes y Volúmenes.
 - `tests/services/systemApi.test.ts`: los tres endpoints y la propagación del mensaje de error.
+
+> **Alcance de los enlaces a la limpieza:** el enlace **solo cambia de pestaña** (§3.4: "enlaza a la pestaña correspondiente"). No pre-selecciona el filtro "no usadas" ni añade filtros nuevos: `ImagesView` no tiene filtro de no-usadas y crearlo sería functionality de SPEC-07, fuera del alcance de esta spec.
+
+### Definición de porcentaje recuperable
+
+El porcentaje se calcula sobre el **total del propio tipo**, nunca sobre la suma de todos:
+
+```text
+porcentaje = 100 * <X>.reclaimable / <X>.total_size
+```
+
+Si `total_size` es `0` (daemon recién arrancado, o un tipo sin nada) el porcentaje es `0.0%` y **no** se divide: una división por cero en el panel produciría `Infinity` o `NaN` en pantalla.
 
 ### Verificación manual
 - [x] Contrastar las cifras del panel con `docker system df` en una terminal: verificado contra el
   daemon real, los agregados y los mayores consumidores coinciden.
 - [ ] Comprobar que el porcentaje recuperable refleja la realidad tras limpiar imágenes no usadas.
   Queda pendiente: requiere una limpieza real, que es decisión del usuario y no se ejecuta en las
-  verificaciones.
+  verificaciones. El cálculo ya está cubierto por tests unitarios con total `0` y con total normal.
 
 ---
 
@@ -302,14 +316,22 @@ Característica: Resumen del host y consumo de disco
   - [x] Ejecutar `pytest -v` y validar aprobación al 100%
 - [x] **Fase 4: Tests Primero en Frontend**
   - [x] Crear `frontend/tests/components/SystemSummaryBar.test.tsx`
-  - [x] Crear `frontend/tests/components/SystemDetailPanel.test.tsx`
+  - [x] Completar `frontend/tests/components/SystemDetailPanel.test.tsx` con los casos que faltaban: porcentaje recuperable y enlaces a Imágenes y Volúmenes
   - [x] Crear `frontend/tests/services/systemApi.test.ts`
-- [x] **Fase 5: Implementación Frontend**
+  - [x] Añadir a `frontend/tests/components/SystemSummaryBar.test.tsx` el caso del botón de refresco y del reintento desde el estado de error
+  - [x] Ejecutar `vitest` y confirmar que los casos nuevos fallan por implementación ausente (fase roja)
+- [x] **Fase 5: Implementación Frontend** *(las tres primeras tareas ya se hicieron en la entrega original)*
   - [x] Añadir `getSystemInfo`, `getDiskUsage` y `getSystemOverview` a `frontend/src/services/dockerApi.ts`
   - [x] Crear `frontend/src/hooks/useSystemOverview.ts` con la carga y el refresco manual
   - [x] Implementar `frontend/src/components/system/SystemSummaryBar.tsx` con el estado "no conectado"
-  - [x] Implementar `frontend/src/components/system/SystemDetailPanel.tsx` con el desglose y los enlaces a las limpiezas
-  - [x] Integrar la franja en `frontend/src/App.tsx` y el botón de refresco
+  - [x] Implementar `frontend/src/components/system/SystemDetailPanel.tsx` con el desglose
+  - [x] Mostrar el porcentaje recuperable junto a los bytes en cada bloque de uso, con total `0` tratado como `0.0%`
+  - [x] Convertir las cifras recuperables de Imágenes y Volúmenes en enlaces que cambian de pestaña, cableando `onNavigateTab` desde `App.tsx`
+  - [x] Añadir el botón de refresco a la franja, también en el estado de error, sin vaciar la franja mientras se recarga
+  - [x] Pasar `overview` por prop a `SystemDetailPanel` para que no repita la llamada al daemon
+  - [x] Unificar la lógica de carga de `useSystemOverview` en un único sitio y separar `refreshing` de `loading`
+- [x] **Fase 5bis: Corrección de defecto lateral**
+  - [x] Definir `--color-elevated-hover` en `frontend/src/index.css`: la clase `hover:bg-elevated-hover` se usa en 8 sitios pero el token no existía, así que Tailwind no la generaba y ninguno de esos hovers hacía nada
 - [x] **Fase 6: Verificación y Quality Gates**
   - [x] Ejecutar y aprobar la suite backend (`make backend-test`) y el lint (`make backend-lint`)
   - [x] Ejecutar y aprobar la suite frontend (`pnpm run test`, `pnpm run lint`, `pnpm run build`)

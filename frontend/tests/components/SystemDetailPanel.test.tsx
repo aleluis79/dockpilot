@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, fireEvent, within } from '@testing-library/react'
 import { SystemDetailPanel } from '../../src/components/system/SystemDetailPanel'
 import type { SystemOverview } from '../../src/types/system'
 
@@ -35,21 +35,11 @@ const overview: SystemOverview = {
   top_volumes: [{ kind: 'volume', name: 'datos-app', size: 104857600, detail: 'Sin usar' }],
 }
 
-function mockOverview(datos: unknown = overview) {
-  return vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => datos })
-  )
-}
+describe('SystemDetailPanel', () => {  beforeEach(() => vi.restoreAllMocks())
 
-describe('SystemDetailPanel', () => {
-  beforeEach(() => vi.unstubAllGlobals())
+  it('desglosa el uso por tipo de recurso', () => {
+    render(<SystemDetailPanel overview={overview} />)
 
-  it('desglosa el uso por tipo de recurso', async () => {
-    mockOverview()
-    render(<SystemDetailPanel />)
-
-    await waitFor(() => expect(screen.getByTestId('usage-blocks')).toBeInTheDocument())
     const bloques = within(screen.getByTestId('usage-blocks'))
     expect(bloques.getByText('Imágenes')).toBeInTheDocument()
     expect(bloques.getByText('Contenedores')).toBeInTheDocument()
@@ -58,32 +48,99 @@ describe('SystemDetailPanel', () => {
     expect(bloques.getByText(/4 en total · 2 en uso/)).toBeInTheDocument()
   })
 
-  it('separa las capas compartidas del total de imágenes', async () => {
+  it('separa las capas compartidas del total de imágenes', () => {
     // `layers_size` son capas compartidas: sumarlas al total de imágenes
     // contaría el mismo espacio dos veces.
-    mockOverview()
-    render(<SystemDetailPanel />)
+    render(<SystemDetailPanel overview={overview} />)
 
-    await waitFor(() => expect(screen.getByTestId('layers-size')).toBeInTheDocument())
     expect(screen.getByTestId('layers-size')).toHaveTextContent('1.0 GB')
   })
 
-  it('lista los mayores consumidores en orden', async () => {
-    mockOverview()
-    render(<SystemDetailPanel />)
+  it('lista los mayores consumidores en orden', () => {
+    render(<SystemDetailPanel overview={overview} />)
 
-    await waitFor(() => expect(screen.getByText('tmp/builder-leftover:latest')).toBeInTheDocument())
+    expect(screen.getByText('tmp/builder-leftover:latest')).toBeInTheDocument()
     const elementos = screen.getAllByTestId('top-consumer')
     expect(elementos[0]).toHaveTextContent('tmp/builder-leftover:latest')
     expect(elementos[1]).toHaveTextContent('postgres:16-alpine')
   })
 
-  it('indica cuando no hay informacion de consumo que mostrar', async () => {
-    mockOverview({ ...overview, top_images: [], top_volumes: [] })
-    render(<SystemDetailPanel />)
+  it('indica cuando no hay informacion de consumo que mostrar', () => {
+    render(<SystemDetailPanel overview={{ ...overview, top_images: [], top_volumes: [] }} />)
 
     // El panel no repite la versión (ya está en la franja); se identifica por el host
-    await waitFor(() => expect(screen.getByText('dockpilot-test')).toBeInTheDocument())
+    expect(screen.getByText('dockpilot-test')).toBeInTheDocument()
     expect(screen.getByText(/sin datos de consumo/i)).toBeInTheDocument()
+  })
+
+  it('muestra el porcentaje recuperable de cada tipo sobre su propio total', () => {
+    render(<SystemDetailPanel overview={overview} />)
+
+    // 1 GiB de 2 GiB, 512 KiB de 1 MiB, 53747987 de 53747987
+    expect(within(screen.getByTestId('usage-images')).getByText('50.0%')).toBeInTheDocument()
+    expect(within(screen.getByTestId('usage-containers')).getByText('50.0%')).toBeInTheDocument()
+    expect(within(screen.getByTestId('usage-volumes')).getByText('100.0%')).toBeInTheDocument()
+  })
+
+  it('trata un total cero como cero por ciento en vez de dividir entre cero', () => {
+    // Regresión: `reclaimable / total_size` con `total_size = 0` es Infinity o
+    // NaN, y eso se renderiza literally en la pantalla.
+    render(
+      <SystemDetailPanel
+        overview={{
+          ...overview,
+          usage: {
+            ...overview.usage,
+            images: { total_count: 0, active_count: 0, total_size: 0, reclaimable: 0 },
+          },
+        }}
+      />
+    )
+
+    const imagenes = within(screen.getByTestId('usage-images'))
+    expect(imagenes.getByText('0.0%')).toBeInTheDocument()
+    expect(imagenes.queryByText(/Infinity|NaN/)).not.toBeInTheDocument()
+  })
+
+  it('enlaza la cifra recuperable de imágenes a la vista de imágenes', () => {
+    const onNavigateTab = vi.fn()
+    render(<SystemDetailPanel overview={overview} onNavigateTab={onNavigateTab} />)
+
+    fireEvent.click(
+      within(screen.getByTestId('usage-images')).getByRole('button', { name: /imágenes/i })
+    )
+
+    expect(onNavigateTab).toHaveBeenCalledWith('images')
+  })
+
+  it('enlaza la cifra recuperable de volúmenes a la vista de volúmenes', () => {
+    const onNavigateTab = vi.fn()
+    render(<SystemDetailPanel overview={overview} onNavigateTab={onNavigateTab} />)
+
+    fireEvent.click(
+      within(screen.getByTestId('usage-volumes')).getByRole('button', { name: /volúmenes/i })
+    )
+
+    expect(onNavigateTab).toHaveBeenCalledWith('volumes')
+  })
+
+  it('no enliza los contenedores porque no hay una vista que los recicle', () => {
+    // SPEC-09 solo enlaza a SPEC-07 (imágenes) y SPEC-08 (volúmenes): una
+    // limpieza de contenedores no existe en el panel.
+    render(<SystemDetailPanel overview={overview} onNavigateTab={vi.fn()} />)
+
+    expect(
+      within(screen.getByTestId('usage-containers')).queryByRole('button')
+    ).not.toBeInTheDocument()
+  })
+
+  it('sigue mostrando el desglose aunque no se sepa navegar', () => {
+    // El panel se monta también en tests yStorybook donde no hay navegación:
+    // sin `onNavigateTab` las cifras se muestran como texto plano.
+    render(<SystemDetailPanel overview={overview} />)
+
+    const imagenes = within(screen.getByTestId('usage-images'))
+    expect(imagenes.getByText(/1\.0 GB recuperables/)).toBeInTheDocument()
+    expect(imagenes.queryByRole('button')).not.toBeInTheDocument()
   })
 })

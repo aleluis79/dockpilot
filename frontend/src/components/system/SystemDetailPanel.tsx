@@ -1,20 +1,48 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { Server, Cpu, MemoryStick, HardDrive, Layers, Package, Box, Database } from 'lucide-react'
-import { useSystemOverview } from '../../hooks/useSystemOverview'
-import { formatBytes } from '../../utils/format'
-import type { ResourceUsage, TopConsumer } from '../../types/system'
+import { Server, Cpu, MemoryStick, HardDrive, Layers, Package, Box, Database, ArrowRight } from 'lucide-react'
+import { formatBytes, formatPercent } from '../../utils/format'
+import type { ResourceUsage, TopConsumer, SystemOverview, CleanupTab } from '../../types/system'
+
+/**
+ * Porcentaje que el daemon considera recuperable sobre el total del recurso.
+ *
+ * El total se compara con el tipo **propio**: mezclar denominadores haría que
+ * "1 MB recuperable" pareciera un problema cuando el total son 20 GB. Con
+ * `total_size = 0` el resultado es 0 en vez de `Infinity` o `NaN`, que se
+ * renderizarían literalmente en pantalla.
+ */
+function porcentajeRecuperable(usage: ResourceUsage): number {
+  if (!usage.total_size) return 0
+  return (usage.reclaimable / usage.total_size) * 100
+}
 
 function UsageBlock({
   icon: Icon,
+  id,
   label,
   usage,
+  tab,
+  onNavigateTab,
 }: {
   icon: typeof Package
+  id: string
   label: string
   usage: ResourceUsage
+  /** Pestaña a la que lleva la cifra recuperable. `undefined` = no hay destino. */
+  tab?: CleanupTab
+  onNavigateTab?: (tab: CleanupTab) => void
 }) {
+  const porcentaje = porcentajeRecuperable(usage)
+  const destacado = usage.reclaimable > 0
+  // Solo hay enlace si además de destino hay a quién avisar: un tipo sin vista
+  // associated se queda como texto plano.
+  const enlazable = tab !== undefined && onNavigateTab !== undefined
+
   return (
-    <div className="flex items-start gap-2.5 p-3 bg-elevated rounded-lg border border-default">
+    <div
+      className="flex items-start gap-2.5 p-3 bg-elevated rounded-lg border border-default"
+      data-testid={`usage-${id}`}
+    >
       <Icon className="w-4 h-4 mt-0.5 shrink-0 text-fg-subtle" />
       <div className="min-w-0 flex-1">
         <div className="text-xs font-semibold text-fg">{label}</div>
@@ -24,13 +52,36 @@ function UsageBlock({
         <div className="text-[11px] text-fg-subtle">
           {formatBytes(usage.total_size)} ocupados
         </div>
-        <div
-          className={`text-[11px] mt-0.5 ${
-            usage.reclaimable > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-fg-subtle'
-          }`}
-        >
-          {formatBytes(usage.reclaimable)} recuperables
-        </div>
+        {/*
+          La cifra recuperable es lo único accionable de la spec, así que es un
+          botón cuando hay adónde ir. No se ejecuta ninguna limpieza desde aquí:
+          solo lleva a la pestaña que ya la hace.
+        */}
+        {enlazable ? (
+          <button
+            type="button"
+            onClick={() => onNavigateTab?.(tab)}
+            className={`text-[11px] mt-0.5 flex items-center gap-1 text-left hover:underline cursor-pointer ${
+              destacado ? 'text-amber-600 dark:text-amber-400' : 'text-fg-subtle'
+            }`}
+          >
+            {formatBytes(usage.reclaimable)} recuperables{' '}
+            <span>{formatPercent(porcentaje)}</span>
+            {/* El destino solo existe para quien usa lector de pantalla: sin él
+                el botón se anuncia como "1.0 GB recuperables 50.0%, botón" y no
+                dice que lleva a otra vista. */}
+            <span className="sr-only">, ir a la vista de {label}</span>
+            <ArrowRight className="w-3 h-3 shrink-0" />
+          </button>
+        ) : (
+          <div
+            className={`text-[11px] mt-0.5 ${
+              destacado ? 'text-amber-600 dark:text-amber-400' : 'text-fg-subtle'
+            }`}
+          >
+            {formatBytes(usage.reclaimable)} recuperables <span>{formatPercent(porcentaje)}</span>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -73,19 +124,24 @@ function ConsumerList({
   )
 }
 
+interface SystemDetailPanelProps {
+  overview: SystemOverview
+  /**
+   * Callback de navegación. Es opcional porque el panel se monta también sin
+   * pestaña que abrir; en ese caso las cifras recuperables se muestran como
+   * texto plano en vez de como enlaces.
+   */
+  onNavigateTab?: (tab: CleanupTab) => void
+}
+
 /**
  * Detalle del host: identificación, desglose de uso y mayores consumidores.
  *
- * Los datos llegan por prop desde `SystemSummaryBar`, que ya hizo la petición, para
- * no duplicar la llamada al daemon al abrir y cerrar el panel.
+ * El resumen llega por prop desde `SystemSummaryBar`, que ya hizo la petición:
+ * pedirlo aquí abriría una segunda llamada idéntica al daemon cada vez que se
+ * despliega el panel.
  */
-export function SystemDetailPanel() {
-  const { overview, loading } = useSystemOverview()
-
-  if (loading || !overview) {
-    return <div className="p-4 text-xs text-fg-subtle">Cargando detalle del host...</div>
-  }
-
+export function SystemDetailPanel({ overview, onNavigateTab }: SystemDetailPanelProps) {
   const { info, usage } = overview
 
   return (
@@ -123,9 +179,30 @@ export function SystemDetailPanel() {
       <div>
         <h3 className="text-xs font-semibold text-fg mb-2">Uso de disco</h3>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2" data-testid="usage-blocks">
-          <UsageBlock icon={Package} label="Imágenes" usage={usage.images} />
-          <UsageBlock icon={Box} label="Contenedores" usage={usage.containers} />
-          <UsageBlock icon={Database} label="Volúmenes" usage={usage.volumes} />
+          <UsageBlock
+            icon={Package}
+            id="images"
+            label="Imágenes"
+            usage={usage.images}
+            tab="images"
+            onNavigateTab={onNavigateTab}
+          />
+          {/* Sin `tab`: no hay vista que recicle contenedores, así que su cifra
+              recuperable se informa pero no lleva a ninguna parte. */}
+          <UsageBlock
+            icon={Box}
+            id="containers"
+            label="Contenedores"
+            usage={usage.containers}
+          />
+          <UsageBlock
+            icon={Database}
+            id="volumes"
+            label="Volúmenes"
+            usage={usage.volumes}
+            tab="volumes"
+            onNavigateTab={onNavigateTab}
+          />
         </div>
         <p className="text-[11px] text-fg-subtle mt-2 flex items-center gap-1.5">
           <Layers className="w-3.5 h-3.5" />
@@ -142,7 +219,7 @@ export function SystemDetailPanel() {
         <h3 className="text-xs font-semibold text-fg mb-2">Mayores consumidores</h3>
         {overview.top_images.length === 0 && overview.top_volumes.length === 0 ? (
           <p className="text-[11px] text-fg-subtle">
-            Sin datos de consumo por recurso: el daemon no informó de desglos por elemento.
+            Sin datos de consumo por recurso: el daemon no informó de desgloses por elemento.
           </p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

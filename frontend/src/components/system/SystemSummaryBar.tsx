@@ -1,9 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from 'react'
-import { ChevronUp, Server, Cpu, MemoryStick, HardDrive, Layers, X } from 'lucide-react'
+import {
+  ChevronUp,
+  Server,
+  Cpu,
+  MemoryStick,
+  HardDrive,
+  Layers,
+  X,
+  RefreshCw,
+  AlertTriangle,
+} from 'lucide-react'
 import { SystemDetailPanel } from './SystemDetailPanel'
 import { useSystemOverview } from '../../hooks/useSystemOverview'
 import { formatBytes } from '../../utils/format'
+import type { CleanupTab } from '../../types/system'
+
+interface SystemSummaryBarProps {
+  /** Lleva a la vista que ya sabe liberar el espacio. Opcional: sin él, sin enlaces. */
+  onNavigateTab?: (tab: CleanupTab) => void
+}
 
 /**
  * Franja de resumen del host, visible sobre las pestañas.
@@ -11,9 +27,22 @@ import { formatBytes } from '../../utils/format'
  * Muestra el espacio **recuperable** en lugar del total ocupado: lo accionable
  * es lo que se puede liberar. El detalle completo vive en `SystemDetailPanel`.
  */
-export function SystemSummaryBar() {
-  const { overview, loading, error } = useSystemOverview()
+export function SystemSummaryBar({ onNavigateTab }: SystemSummaryBarProps) {
+  const { overview, loading, refreshing, error, refetch } = useSystemOverview()
   const [detailOpen, setDetailOpen] = useState<boolean>(false)
+
+  const botonRefrescar = (
+    <button
+      type="button"
+      onClick={() => void refetch()}
+      disabled={refreshing}
+      aria-label="Refrescar resumen del host"
+      title="Refrescar resumen del host"
+      className="p-1.5 rounded hover:bg-elevated-hover transition-colors disabled:opacity-50"
+    >
+      <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+    </button>
+  )
 
   if (loading) {
     return (
@@ -22,11 +51,15 @@ export function SystemSummaryBar() {
         data-testid="system-summary"
       >
         Leyendo el estado del host...
+        <span className="ml-auto">{botonRefrescar}</span>
       </div>
     )
   }
 
-  if (error || !overview) {
+  // Sin datos no hay nada que refrescar que mejorar, pero sí una salida: sin
+  // este botón, un fallo de red al cargar dejaba la franja bloqueada hasta
+  // recargar la página a mano.
+  if (!overview) {
     return (
       <div
         className="flex items-center gap-2 py-2 text-xs text-fg-subtle border-b border-default bg-elevated"
@@ -34,6 +67,7 @@ export function SystemSummaryBar() {
       >
         <Server className="w-3.5 h-3.5" />
         <span>Resumen del host no disponible: {error ?? 'sin respuesta del daemon'}</span>
+        <span className="ml-auto">{botonRefrescar}</span>
       </div>
     )
   }
@@ -80,15 +114,27 @@ export function SystemSummaryBar() {
           </span>
         </span>
 
-        <button
-          type="button"
-          onClick={() => setDetailOpen((v) => !v)}
-          className="ml-auto flex items-center gap-1 px-2 py-1 rounded hover:bg-elevated-hover transition-colors"
-          aria-expanded={detailOpen}
-        >
-          Detalle
-          <ChevronUp className={`w-3.5 h-3.5 transition-transform ${detailOpen ? '' : 'rotate-180'}`} />
-        </button>
+        {/* Un refresco fallido con datos ya en pantalla no debe borrar lo que se
+            está leyendo: se avisa en línea y se conserva la cifra anterior. */}
+        {error && (
+          <span className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            No se pudo actualizar: {error}
+          </span>
+        )}
+
+        <div className="ml-auto flex items-center gap-1">
+          {botonRefrescar}
+          <button
+            type="button"
+            onClick={() => setDetailOpen((v) => !v)}
+            className="flex items-center gap-1 px-2 py-1 rounded hover:bg-elevated-hover transition-colors"
+            aria-expanded={detailOpen}
+          >
+            Detalle
+            <ChevronUp className={`w-3.5 h-3.5 transition-transform ${detailOpen ? '' : 'rotate-180'}`} />
+          </button>
+        </div>
       </div>
 
       {detailOpen && (
@@ -101,7 +147,7 @@ export function SystemSummaryBar() {
           >
             <X className="w-3.5 h-3.5" />
           </button>
-          <SystemDetailPanel />
+          <SystemDetailPanel overview={overview} onNavigateTab={onNavigateTab} />
         </div>
       )}
     </div>

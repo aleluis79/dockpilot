@@ -50,3 +50,12 @@ export interface SystemOverview {
   top_images: TopConsumer[]
   top_volumes: TopConsumer[]
 }
+
+/**
+ * Pestañas a las que el panel de sistema puede llevar para liberar espacio.
+ *
+ * Deliberadamente más estrecha que el conmutador completo de `App`: los
+ * contenedores no aparecen porque no existe una vista que los recicle, y
+ * `networks` tampoco porque no hay limpieza de redes.
+ */
+export type CleanupTab = 'images' | 'volumes'

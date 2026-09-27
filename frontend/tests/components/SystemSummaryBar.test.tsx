@@ -36,10 +36,11 @@ const overview: SystemOverview = {
 }
 
 function mockOverview(datos: unknown = overview) {
-  return vi.stubGlobal(
-    'fetch',
-    vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => datos })
-  )
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue({ ok: true, status: 200, json: async () => datos })
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
 }
 
 describe('SystemSummaryBar', () => {
@@ -95,6 +96,92 @@ describe('SystemSummaryBar', () => {
     await waitFor(() =>
       expect(screen.queryByText('Debian GNU/Linux 13 (trixie)')).not.toBeInTheDocument()
     )
+  })
+
+  it('vuelve a pedir el resumen al pulsar el botón de refresco', async () => {
+    const fetchMock = mockOverview()
+    render(<SystemSummaryBar />)
+
+    await waitFor(() => expect(screen.getByText('29.8.1')).toBeInTheDocument())
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: /refrescar/i }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+  })
+
+  it('no vacía la franja mientras refresca', async () => {
+    // Regresión: el refresco ponía `loading` a true y la franja entera se
+    // sustituía por "Leyendo el estado del host...", un parpadeo que hace
+    // perder de vista las cifras que ya se tenían.
+    let liberar: (() => void) | undefined
+    const espera = new Promise<void>((resolve) => {
+      liberar = resolve
+    })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => overview })
+      .mockImplementationOnce(async () => {
+        await espera
+        return { ok: true, status: 200, json: async () => overview }
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<SystemSummaryBar />)
+    await waitFor(() => expect(screen.getByText('29.8.1')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /refrescar/i }))
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+    // La cifra sigue en pantalla mientras la petición está en vuelo
+    expect(screen.getByText('29.8.1')).toBeInTheDocument()
+    expect(screen.queryByText(/leyendo el estado del host/i)).not.toBeInTheDocument()
+
+    liberar?.()
+    await waitFor(() =>
+      expect(screen.queryByText(/formato inesperado|no disponible/i)).not.toBeInTheDocument()
+    )
+  })
+
+  it('ofrece el botón de refresco también cuando el daemon no responde', async () => {
+    // Regresión: la rama de error no tenía ningún botón, así que un fallo de
+    // red al cargar dejaba la franja bloqueada hasta recargar la página a mano.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ detail: 'no disponible' }),
+      })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => overview })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<SystemSummaryBar />)
+
+    await waitFor(() => expect(screen.getByText(/no disponible/)).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /refrescar/i }))
+
+    // El reintento funciona y la franja sale del estado de error
+    expect(await screen.findByText('29.8.1')).toBeInTheDocument()
+    expect(screen.queryByText(/no disponible/)).not.toBeInTheDocument()
+  })
+
+  it('pide el resumen una sola vez aunque se abra y cierre el detalle', async () => {
+    // El panel recibía el resumen por hook propio, así que montarlo disparaba una
+    // segunda llamada idéntica al daemon.
+    const fetchMock = mockOverview()
+    render(<SystemSummaryBar />)
+
+    await waitFor(() => expect(screen.getByText('29.8.1')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /detalle/i }))
+    expect(await screen.findByText('6.12.0')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /cerrar/i }))
+    await waitFor(() => expect(screen.queryByText('6.12.0')).not.toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /detalle/i }))
+    expect(await screen.findByText('6.12.0')).toBeInTheDocument()
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('no revienta si el daemon devuelve una forma inesperada', async () => {

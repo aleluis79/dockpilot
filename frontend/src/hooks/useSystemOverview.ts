@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { dockerApi } from '../services/dockerApi'
 import type { SystemOverview } from '../types/system'
 
@@ -26,55 +26,53 @@ function esOverviewValido(datos: unknown): datos is SystemOverview {
  * Se consulta una sola vez al montar: son datos del host, no un recurso que
  * cambie por la acción del usuario. El refresco queda disponible por si se
  * quiere volver a leer tras una limpieza.
+ *
+ * `loading` y `refreshing` están separados a propósito: `loading` vacía la
+ * franja y solo aplica a la primera carga; `refreshing` la deja en pantalla con
+ * el botón en estado de carga, para que un refresco no borre las cifras que el
+ * usuario ya está leyendo.
  */
 export function useSystemOverview() {
   const [overview, setOverview] = useState<SystemOverview | null>(null)
   const [loading, setLoading] = useState<boolean>(true)
+  const [refreshing, setRefreshing] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
+  // Un contador de petición descarta las respuestas que llegan tarde: si se
+  // refresca dos veces seguidas, la más antigua no pisa a la más nueva.
+  const peticionActual = useRef(0)
 
-  const load = useCallback(async () => {
+  const cargar = useCallback(async (inicial: boolean) => {
+    const id = ++peticionActual.current
+    if (inicial) setLoading(true)
+    else setRefreshing(true)
+    setError(null)
+
     try {
-      setLoading(true)
-      setError(null)
       const data = await dockerApi.getSystemOverview()
+      if (id !== peticionActual.current) return
       if (!esOverviewValido(data)) {
         setError('El daemon devolvio una respuesta con un formato inesperado')
         return
       }
       setOverview(data)
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Error desconocido al leer el resumen del sistema')
+      if (id !== peticionActual.current) return
+      setError(
+        err instanceof Error ? err.message : 'Error desconocido al leer el resumen del sistema'
+      )
     } finally {
-      setLoading(false)
+      if (id === peticionActual.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [])
 
   useEffect(() => {
-    let ignore = false
+    void cargar(true)
+  }, [cargar])
 
-    const fetchOverview = async () => {
-      try {
-        const data = await dockerApi.getSystemOverview()
-        if (ignore) return
-        if (!esOverviewValido(data)) {
-          setError('El daemon devolvio una respuesta con un formato inesperado')
-          return
-        }
-        setOverview(data)
-      } catch (err: unknown) {
-        if (!ignore) {
-          setError(err instanceof Error ? err.message : 'Error desconocido al leer el resumen del sistema')
-        }
-      } finally {
-        if (!ignore) setLoading(false)
-      }
-    }
+  const refetch = useCallback(() => cargar(false), [cargar])
 
-    fetchOverview()
-    return () => {
-      ignore = true
-    }
-  }, [])
-
-  return { overview, loading, error, refetch: load }
+  return { overview, loading, refreshing, error, refetch }
 }

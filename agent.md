@@ -48,8 +48,9 @@ Todo desarrollo en DockPilot sigue rigurosamente el ciclo SDD de 5 etapas:
 - **Testing**: Vitest + `@testing-library/react` + `jsdom`.
 
 ### Sistema de Temas (contrato transversal)
-- **Tokens semánticos**: los colores de superficie, texto y borde **no se escriben literals** en los componentes. Se usan los tokens declarados en `frontend/src/index.css` (`bg-base`, `bg-surface`, `bg-elevated`, `bg-inset`, `text-fg`, `text-fg-muted`, `text-fg-subtle`, `border-default`, `border-strong`).
+- **Tokens semánticos**: los colores de superficie, texto y borde **no se escriben literals** en los componentes. Se usan los tokens declarados en `frontend/src/index.css` (`bg-base`, `bg-surface`, `bg-elevated`, `bg-elevated-hover`, `bg-inset`, `text-fg`, `text-fg-muted`, `text-fg-subtle`, `border-default`, `border-strong`).
 - **Prohibido** reintroducir clases de la paleta `zinc` en `src/**/*.tsx`; un test de arquitectura (`frontend/tests/theme-tokens.test.ts`) lo verifica automáticamente.
+- **Un token que se usa debe existir**: en Tailwind v4 una utilidad cuyo color no está en `@theme` no se genera, y la clase queda como texto muerto sin avisar. `hover:bg-elevated-hover` llevaba tiempo en 8 componentes sin que `--color-elevated-hover` existiera. Antes de escribir `bg-`, `text-`, `border-` o `hover:*` de un token, comprobar que la variable está declarada en `index.css`.
 - **Variante `dark`**: funciona por clase (`@custom-variant dark`), no por `prefers-color-scheme`. La clase `dark` se aplica a `document.documentElement` por el hook `useTheme`. No existe una clase `light`: el tema claro es la ausencia de `dark`.
 - **Default**: `:root` declara los valores **oscuros**, para que la interfaz no cambie de aspecto si el JavaScript no llega a ejecutarse.
 - **Superficies no HTML** (xterm.js, barras de scroll) leen los tokens por JavaScript o por variables CSS, nunca por hexadecimales fijos.
@@ -88,10 +89,9 @@ dockpilot/
 │   │   ├── api/
 │   │   │   ├── v1/
 │   │   │   │   ├── containers.py   # REST de contenedores + /{id}/stats
-│   │   │   │   ├── images.py
-│   │   ├── network.py
-│   │   ├── networks.py
-│   │   ├── system.py       # REST de imágenes: local, search, detalle, borrado
+│   │   │   │   ├── images.py       # REST de imágenes: local, search, detalle, borrado
+│   │   │   │   ├── networks.py     # REST de redes: listado, detalle, alta, prune, borrado
+│   │   │   │   ├── system.py       # REST de sistema: /info, /df, /overview
 │   │   │   │   ├── volumes.py      # REST de volúmenes: listado, detalle, prune, borrado
 │   │   │   │   └── ws.py           # WebSocket: /logs, /stats, /terminal, /images/pull
 │   │   │   └── router.py
@@ -101,17 +101,18 @@ dockpilot/
 │   │   ├── schemas/
 │   │   │   ├── container.py
 │   │   │   ├── image.py
-│   │   ├── system.py
 │   │   │   ├── log.py
+│   │   │   ├── network.py
 │   │   │   ├── stats.py
+│   │   │   ├── system.py
 │   │   │   ├── terminal.py
 │   │   │   └── volume.py
 │   │   ├── services/
 │   │   │   ├── container_service.py
 │   │   │   ├── image_service.py
-│   │   │   ├── stats_service.py
 │   │   │   ├── network_service.py
-│   │   ├── system_service.py # Primitivo compartido /info y /system/df (SPEC-09)
+│   │   │   ├── stats_service.py
+│   │   │   ├── system_service.py   # Primitivo compartido /info y /system/df (SPEC-09)
 │   │   │   └── volume_service.py
 │   │   └── main.py
 │   ├── tests/

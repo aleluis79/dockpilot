@@ -17,6 +17,10 @@
   --color-base: var(--dp-base);
   --color-surface: var(--dp-surface);
   --color-elevated: var(--dp-elevated);
+  /* `--color-elevated-hover` genera `hover:bg-elevated-hover`. La clase se
+     usaba en ocho componentes, pero la variable no existía: Tailwind no
+     generaba nada y esos hovers no hacían nada. */
+  --color-elevated-hover: var(--dp-elevated-hover);
   --color-inset: var(--dp-inset);
   --color-fg: var(--dp-fg);
   --color-fg-muted: var(--dp-fg-muted);
@@ -31,6 +35,9 @@
   --dp-base: #09090b; /* zinc-950 */
   --dp-surface: #18181b; /* zinc-900 */
   --dp-elevated: #27272a; /* zinc-800 */
+  /* Un paso por encima de `elevated`, en el sentido de "más visible": en
+     oscuro se aclara, en claro se oscurece. */
+  --dp-elevated-hover: #3f3f46; /* zinc-700 */
   --dp-inset: #09090b; /* zinc-950 */
   --dp-fg: #f4f4f5; /* zinc-100 */
   --dp-fg-muted: #a1a1aa; /* zinc-400 */
@@ -45,6 +52,7 @@ html:not(.dark) {
   --dp-base: #ffffff;
   --dp-surface: #fafafa; /* zinc-50 */
   --dp-elevated: #f4f4f5; /* zinc-100 */
+  --dp-elevated-hover: #e4e4e7; /* zinc-200 */
   --dp-inset: #f4f4f5;
   --dp-fg: #18181b; /* zinc-900 */
   --dp-fg-muted: #52525b; /* zinc-600 */

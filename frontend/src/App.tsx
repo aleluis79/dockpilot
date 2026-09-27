@@ -75,7 +75,7 @@ function App() {
       {/* La franja comparte la columna del contenido: si se deja fuera de
           `main`, ocupa todo el ancho de la pagina y desentona con las tablas. */}
       <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <SystemSummaryBar />
+        <SystemSummaryBar onNavigateTab={setActiveView} />
 
       <HelpModal open={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
       </div>
