@@ -15,6 +15,12 @@ interface ComposeActionPanelProps {
   accionInicial?: ComposeAction | null
   /** Solo tiene efecto con `accionInicial: 'down'`. Irreversible. */
   volumes?: boolean
+  /**
+   * `up --remove-orphans`. `false` en el despliegue desde el plan, donde el
+   * nombre puede chocar con otro proyecto y el flag se llevaría por delante
+   * contenedores ajenos (SPEC-15 §3.3).
+   */
+  removeOrphans?: boolean
 }
 
 /** Acciones que se ofrecen sin confirmación previa. `down` tiene su diálogo. */
@@ -27,6 +33,7 @@ export function ComposeActionPanel({
   onRefrescar,
   accionInicial = null,
   volumes = false,
+  removeOrphans = true,
 }: ComposeActionPanelProps) {
   const [accion, setAccion] = useState<ComposeAction | null>(accionInicial)
   const {
@@ -51,6 +58,7 @@ export function ComposeActionPanel({
       path,
       project_name: project,
       volumes: nueva === 'down' ? volumes : undefined,
+      remove_orphans: nueva === 'up' ? removeOrphans : undefined,
     })
   }
 
@@ -66,12 +74,14 @@ export function ComposeActionPanel({
   return (
     <div className={MODAL_OVERLAY} onClick={onClose}>
       <div
+        data-testid="compose-action-panel"
+        data-project={project}
+        data-remove-orphans={String(removeOrphans)}
         className="bg-surface border border-default rounded-lg w-full max-w-3xl max-h-[85vh] flex flex-col shadow-xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-label={`Acciones del proyecto ${project}`}
-        data-testid="compose-action-panel"
       >
         <div className="flex items-center justify-between p-4 border-b border-default shrink-0">
           <h3 className="text-sm font-semibold text-fg font-mono truncate">{project}</h3>

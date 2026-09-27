@@ -154,7 +154,9 @@ async def test_plan_tolera_servicios_sin_secciones_opcionales(
     r = await _plan(plan_client, path=str(archivo))
 
     cache = next(s for s in r.json()["services"] if s["name"] == "cache")
-    assert cache["build"] is False
+    # Sin `build` no hay objeto de coste. Antes era `False`; ahora es `None`,
+    # porque `None` y "cuesta cero" no son lo mismo (SPEC-15 §2.1).
+    assert cache["build"] is None
     assert cache["depends_on"] == []
     assert cache["profiles"] == []
     assert cache["ports"] == []
@@ -166,7 +168,14 @@ async def test_plan_detecta_build_depends_on_y_profiles(plan_client, fake_spawn,
     r = await _plan(plan_client, path=str(archivo))
 
     api = next(s for s in r.json()["services"] if s["name"] == "api")
-    assert api["build"] is True
+    # `build` pasó de booleano a coste estimado. La intención del test de SPEC-12
+    # era detectar que el servicio construye; ahora además se afirma el contexto
+    # que compose declaró, que es lo que el usuario necesita para decidir (SPEC-15).
+    assert api["build"] is not None
+    assert api["build"]["context"] == "/abs/app"
+    # `/abs/app` no existe en el host de pruebas, así que la estimación lo dice en
+    # vez de devolver un 0 que se leería como "no pesa".
+    assert api["build"]["error"] is not None
     # `depends_on` llega como mapa con la condición; al usuario le importa qué
     # servicios espera, no la condición, así que se queda con las claves.
     assert api["depends_on"] == ["db"]

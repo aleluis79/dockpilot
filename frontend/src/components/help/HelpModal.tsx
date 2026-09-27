@@ -224,6 +224,22 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                     qué daría. Las operaciones reales van en la fila del proyecto.
                     <br />
                     <br />
+                    <strong className="text-fg">Desplegar</strong> arranca el archivo
+                    desde aquí, sin salir del panel: es lo que permite poner en marcha
+                    un compose que no está en la tabla, porque un archivo que nunca ha
+                    corrido no deja etiquetas y no aparece en{' '}
+                    <strong className="text-fg">Proyectos</strong>. Si algún servicio
+                    declara <code className="font-mono">build</code> y no tiene imagen,
+                    Docker la construye antes de arrancar, así que antes de hacerlo se
+                    dice cuántos servicios son y cuánto pesa el contexto —los pesos no
+                    aplican <code className="font-mono">.dockerignore</code> y suelen
+                    ser algo mayores—. Se llama Desplegar y no Iniciar porque con
+                    <code className="text-fg"> build</code> puede no ser inmediato. Si
+                    el despliegue se queda a medias, el proyecto aparece igualmente en
+                    la tabla, y{' '}
+                    <strong className="text-fg">Bajar</strong> es lo que lo limpia.
+                    <br />
+                    <br />
                     <strong className="text-fg">Seleccionar archivo</strong> abre un
                     explorador para no tener que copiar la ruta a mano, que es como se
                     acababa previsualizando el proyecto equivocado. Solo recorre tu
@@ -403,6 +419,20 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                       frontend; si no, ajusta{' '}
                       <code className="font-mono">FRONTEND_PORT</code> al arrancar el
                       backend.
+                    </p>
+                  </div>
+
+                  <div>
+                    <h4 className="text-fg font-semibold text-[15px]">
+                      No deja desplegar porque el nombre está ocupado
+                    </h4>
+                    <p className="leading-relaxed mt-0.5">
+                      Dos archivos compose con el mismo nombre se pelean por los mismos
+                      recursos, y <code className="font-mono">container_name</code> es
+                      global en Docker. Si el nombre ya lo usa un{' '}
+                      <strong className="text-fg">proyecto distinto</strong>, el panel
+                      lo bloquea y dice cuál. Si es el mismo archivo, no hay conflicto:
+                      desplegar solo lo reinicia.
                     </p>
                   </div>
 

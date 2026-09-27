@@ -158,4 +158,77 @@ describe('ProjectsView', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
   })
+
+  it('refresca el inventario al desplegar desde el plan', async () => {
+    // El despliegue desde el plan lanza la misma accion que la fila, pero el panel
+    // se lo monta el propio modal. Sin encadenar `onRefrescar` el proyecto recien
+    // arrancado no aparecia en la tabla hasta cambiar de pestana, y la ayuda
+    // decia que si (SPEC-15 parrafo 3.8).
+    const plan = {
+      project_name: 'tickets-app',
+      source_path: '/p/docker-compose.yml',
+      services: [],
+      networks: [],
+      volumes: [],
+      warnings: [],
+      proyecto_en_uso: null,
+      resolved_by: 'docker-compose-cli',
+    }
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      status: 200,
+      json: async () => (String(url).includes('/plan') ? plan : overview),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const sockets: {
+      onmessage: ((e: { data: string }) => void) | null
+    }[] = []
+    class WS {
+      onopen: (() => void) | null = null
+      onmessage: ((e: { data: string }) => void) | null = null
+      onclose: (() => void) | null = null
+      onerror: (() => void) | null = null
+      close() {}
+      constructor(public url: string) {
+        sockets.push(this)
+      }
+    }
+    // @ts-expect-error doble de WebSocket
+    global.WebSocket = WS
+
+    const onRefrescar = vi.fn()
+    render(<ProjectsView onRefrescar={onRefrescar} />)
+
+    await waitFor(() => expect(screen.getByText('tickets-app')).toBeInTheDocument())
+    fireEvent.click(screen.getAllByRole('button', { name: /^plan$/i })[0])
+    fireEvent.change(await screen.findByLabelText(/ruta del archivo/i), {
+      target: { value: '/p/docker-compose.yml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+    // El espia no se ha llamado todavia: lo que lo dispara es el `exit` del
+    // despliegue, no el montaje de la vista.
+    expect(onRefrescar).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /^desplegar$/i }))
+
+    // El backend avisa con su `exit` de codigo 0, y ahi es cuando se recarga.
+    await waitFor(() => expect(sockets.length).toBeGreaterThan(0))
+    const socket = sockets[0]
+    socket.onmessage?.({
+      data: JSON.stringify({
+        type: 'start',
+        action: 'up',
+        project: 'tickets-app',
+        path: '/p/docker-compose.yml',
+        command: [],
+      }),
+    })
+    socket.onmessage?.({
+      data: JSON.stringify({ type: 'exit', action: 'up', code: 0, duration_ms: 10 }),
+    })
+
+    await waitFor(() => expect(onRefrescar).toHaveBeenCalled())
+  })
 })

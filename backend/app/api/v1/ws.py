@@ -383,7 +383,16 @@ async def compose_accion_ws(
     action: str,
     docker: DockerDep,
     path: str = Query(..., description="Ruta absoluta del archivo compose"),
-    project_name: str | None = Query(None, description="Nombre de proyecto (-p)"),
+    project_name: str | None = Query(
+        None,
+        description=(
+            "Nombre de proyecto (-p). Obligatorio en la practica: se valida aqui y "
+            "no en la firma para poder devolver un 400 legible (SPEC-15 §3.4)"
+        ),
+    ),
+    remove_orphans: bool = Query(
+        True, description="Solo para up: añade --remove-orphans"
+    ),
     service: str | None = Query(None, description="Servicio, como argumento posicional"),
     follow: bool = Query(True, description="Solo para logs: seguir la salida"),
     volumes: bool = Query(False, description="Solo para down: añade --volumes"),
@@ -421,11 +430,31 @@ async def compose_accion_ws(
         await _ws_error(websocket, 404, f"No existe el archivo: {path}")
         return
 
+    # 3. El nombre de proyecto. Se valida **después** de la ruta y no en la firma
+    #    con `Query(...)`, porque un parámetro obligatorio que falta hace que
+    #    FastAPI cierre la conexión antes de que el handler pueda explicar nada.
+    #
+    #    No se deduce del directorio: compose lee `name:` del archivo, y en el host
+    #    de referencia `sica/docker-compose.yml` declara `name: simp-sica` con el
+    #    directorio `sica`. Adivinar haría que la comprobación de `409` de abajo
+    #    mirara el proyecto equivocado (SPEC-15 §3.4).
+    if not (project_name or "").strip():
+        await _ws_error(
+            websocket,
+            400,
+            (
+                "Falta el nombre de proyecto. No se puede deducir del directorio "
+                "porque Docker Compose lo lee del propio archivo con `name:`, y "
+                "en el host de referencia no siempre coinciden."
+            ),
+        )
+        return
+    proyecto = (project_name or "").strip()
+
     # 3. `down --volumes` es la única acción irreversible. Parar por sorpresa a
     #    los contenedores para después borrarles los volúmenes no es aceptable,
     #    así que se exige una parada explícita.
     if action == "down" and volumes:
-        proyecto = project_name or _proyecto_por_defecto(archivo)
         if await _tiene_contenedores(docker, proyecto):
             await _ws_error(
                 websocket,
@@ -455,10 +484,11 @@ async def compose_accion_ws(
             action,
             archivo,
             resultado=resultado,
-            project_name=project_name,
+            project_name=proyecto,
             service=service,
             follow=follow,
             volumes=volumes,
+            remove_orphans=remove_orphans,
         )
     except ValueError as error:
         # Solo alcanzable si `action` no está en la lista, ya comprobada arriba.
@@ -470,15 +500,16 @@ async def compose_accion_ws(
         await websocket.send_json(
             ComposeCommandStart(
                 action=action,
-                project=project_name or _proyecto_por_defecto(archivo),
+                project=proyecto,
                 path=path,
                 command=compose_cli.argumentos_accion(
                     action,
                     path,
-                    project_name=project_name,
+                    project_name=proyecto,
                     service=service,
                     follow=follow,
                     volumes=volumes,
+                    remove_orphans=remove_orphans,
                 ),
             ).model_dump()
         )
@@ -568,16 +599,6 @@ async def _ws_error(websocket: WebSocket, code: int, message: str) -> None:
         await websocket.send_json(ComposeCommandError(code=code, message=message).model_dump())
     except WebSocketDisconnect:
         pass
-
-
-def _proyecto_por_defecto(archivo: Path) -> str:
-    """Nombre de proyecto que compose deduciría del archivo: el directorio.
-
-    Es la misma regla que aplica compose cuando no se le pasa `-p`. El panel
-    normalmente **sí** manda `project_name` explícito, tomándolo del inventario
-    de SPEC-11, así que esta deducción es solo el camino Manual del preview.
-    """
-    return archivo.resolve().parent.name.lower()
 
 
 async def _tiene_contenedores(docker: aiodocker.Docker, proyecto: str) -> bool:

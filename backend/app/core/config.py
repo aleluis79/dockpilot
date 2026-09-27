@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # comunica en la respuesta en lugar de ocurrir en silencio.
     COMPOSE_BROWSE_MAX: int = 500
 
+    # Tope de ficheros al medir el contexto de un `build` para poder decir cuánto
+    # va a costar (SPEC-15 §2.4). En el host de referencia un contexto real se mide
+    # en 0,2 s con 19 000 ficheros, así que el tope está para el caso patológico —
+    # un contexto que sea un directorio del home— y no para el uso normal. Al
+    # alcanzarlo el tamaño sale parcial y marcado, nunca inventado.
+    COMPOSE_BUILD_ESTIMATE_MAX_FILES: int = 20000
+
     model_config = SettingsConfigDict(case_sensitive=True)
 
     @model_validator(mode="after")

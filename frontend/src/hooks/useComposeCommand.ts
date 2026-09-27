@@ -73,6 +73,12 @@ export function useComposeCommand({ onRefrescar }: UseComposeCommandOptions = {}
       if (params.service) parametros.set('service', params.service)
       if (params.follow !== undefined) parametros.set('follow', String(params.follow))
       if (params.volumes !== undefined) parametros.set('volumes', String(params.volumes))
+      // Solo se manda si viene explícito: el backend lo tiene en `true` por
+      // defecto, y mandarlo siempre dejaría el valor implícito a un cambio de
+      // contrato que no se vería en el `start`.
+      if (params.remove_orphans !== undefined) {
+        parametros.set('remove_orphans', String(params.remove_orphans))
+      }
 
       const socket = new WebSocket(
         wsUrl(`/ws/compose/${params.action}?${parametros.toString()}`)

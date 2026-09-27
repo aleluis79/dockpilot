@@ -95,6 +95,16 @@ async function handleResponse<T>(res: Response): Promise<T> {
 }
 
 export const dockerApi = {
+  /**
+   * Listado de contenedores.
+   *
+   * `status` lo admite el backend, pero **la lista de contenedores no lo usa**:
+   * se pide el host entero y el filtro de estado se aplica en el navegador. Pedir
+   * solo los de un estado hacía que los contadores de las pills —que se calculan
+   * sobre la lista completa— bailaran al cambiar de filtro, y convertía cada clic
+   * en una ida y vuelta al daemon. El parámetro se conserva porque es una
+   * capacidad real de la API, no porque el panel la necesite.
+   */
   async listContainers(all: boolean = true, status?: string): Promise<ContainerSummary[]> {
     const params = new URLSearchParams()
     if (all) params.append('all', 'true')

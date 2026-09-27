@@ -90,7 +90,8 @@ export interface PlannedMount {
 export interface PlannedService {
   name: string;
   image: string | null;
-  build: boolean;
+  /** Coste de construir. `null` si el servicio no declara `build`. */
+  build: PlannedBuild | null;
   container_name: string | null;
   command: string | null;
   entrypoint: string | null;
@@ -129,6 +130,26 @@ export interface PlannedVolume {
  * `warnings` sale de `stderr` con código de salida 0: el archivo es válido pero
  * compose avisa de algo, típicamente una variable sin definir.
  */
+export interface PlannedBuild {
+  /**
+   * Estimación del peso del contexto, **sin aplicar `.dockerignore`**: normalmente
+   * sobreestima, y por eso el nombre lo declara. Un número alto hace que el
+   * usuario pregunte; uno bajo hace que el `up` tarde 8 minutos sin avisar.
+   */
+  context: string;
+  bytes_aprox: number;
+  ficheros_aprox: number;
+  /** Se alcanzó el tope de ficheros al medir: la cifra es parcial. */
+  truncado: boolean;
+  error: string | null;
+}
+
+export interface ProjectCollision {
+  nombre: string;
+  config_files: string[];
+  mismo_archivo: boolean;
+}
+
 export interface ComposePlan {
   project_name: string;
   source_path: string;
@@ -136,6 +157,12 @@ export interface ComposePlan {
   networks: PlannedNetwork[];
   volumes: PlannedVolume[];
   warnings: string[];
+  /**
+   * Otro proyecto del host ya ocupa este nombre desde otro archivo. Bloquea el
+   * despliegue: los nombres de red y volumen llevan prefijo del proyecto, y
+   * `container_name` es global en Docker con independencia de él.
+   */
+  proyecto_en_uso: ProjectCollision | null;
   resolved_by: 'docker-compose-cli';
 }
 
@@ -153,6 +180,11 @@ export interface ComposeCommandParams {
   follow?: boolean;
   /** Solo para `down`. Destructivo e irreversible. */
   volumes?: boolean;
+  /**
+   * `up --remove-orphans`. `false` en el despliegue desde el plan, donde el nombre
+   * puede chocar con otro proyecto y el flag se llevaría contenedores ajenos.
+   */
+  remove_orphans?: boolean;
 }
 
 export type ComposeMessage =

@@ -1,9 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { dockerApi } from '../services/dockerApi'
 import type { ContainerSummary } from '../types/docker'
 
-export function useContainers() {
+interface UseContainersOptions {
+  /**
+   * Si la vista que pinta estos datos está a la vista.
+   *
+   * El hook se llama desde `App` y no desde una vista, así que **no se desmonta**
+   * al cambiar de pestaña: sin esto, desplegar un proyecto desde «Proyectos»
+   * dejaba la lista obsoleta y no se notaba hasta tocar el filtro de estado.
+   */
+  activo?: boolean
+}
+
+export function useContainers({ activo = true }: UseContainersOptions = {}) {
   const [containers, setContainers] = useState<ContainerSummary[]>([])
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
@@ -15,10 +26,13 @@ export function useContainers() {
     try {
       setLoading(true)
       setError(null)
-      const data = await dockerApi.listContainers(
-        true,
-        statusFilter === 'all' ? undefined : statusFilter
-      )
+      // **Sin filtro de estado, siempre.** El backend lo soporta, pero filtrar
+      // aquí tenía dos efectos malos: cada clic en un filtro era una ida y vuelta
+      // al daemon, y —peor— los contadores de las pills se calculaban sobre la
+      // lista ya filtrada, así que al elegir «Activos» el contador de «Todos»
+      // marcaba el número de activos y los otros dos caían a cero. Son un censo del
+      // host, no un recuento de lo que se está viendo.
+      const data = await dockerApi.listContainers(true)
       setContainers(data)
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Error desconocido al cargar contenedores'
@@ -26,17 +40,14 @@ export function useContainers() {
     } finally {
       setLoading(false)
     }
-  }, [statusFilter])
+  }, [])
 
   useEffect(() => {
     let ignore = false
 
     const load = async () => {
       try {
-        const data = await dockerApi.listContainers(
-          true,
-          statusFilter === 'all' ? undefined : statusFilter
-        )
+        const data = await dockerApi.listContainers(true)
         if (!ignore) {
           setContainers(data)
           setError(null)
@@ -59,7 +70,38 @@ export function useContainers() {
     return () => {
       ignore = true
     }
-  }, [statusFilter])
+  }, [])
+
+  /*
+   * Volver a la pestaña también recarga.
+   *
+   * El efecto de arriba cubre el montaje y el cambio de filtro, que es lo que
+   * refrescaba la lista cuando los contenedores solo cambiaban desde esta misma
+   * pestaña. Pero el hook vive en `App`, así que no se desmonta al cambiar de
+   * vista: desplegar un proyecto desde «Proyectos» la dejaba obsoleta, y el
+   * síntoma era que los contenedores nuevos no salían hasta tocar el filtro.
+   *
+   * Dos detalles que no son obvios:
+   *   - Se salta la primera activación, porque el montaje ya pidió la lista y
+   *     `activo` empieza en `true`: sin esto, abrir la app la descargaría dos veces.
+   *   - `refetch` va en un ref y no en las dependencias, porque cambia de
+   *     identidad con `statusFilter` y volvería a disparar este efecto en cada
+   *     cambio de filtro, duplicando la petición que ya hace el efecto de arriba.
+   */
+  const primeraActivacion = useRef(true)
+  const refetchRef = useRef(fetchContainers)
+  useEffect(() => {
+    refetchRef.current = fetchContainers
+  }, [fetchContainers])
+
+  useEffect(() => {
+    if (!activo) return
+    if (primeraActivacion.current) {
+      primeraActivacion.current = false
+      return
+    }
+    void refetchRef.current()
+  }, [activo])
 
   const executeAction = async (
     id: string,
@@ -100,13 +142,20 @@ export function useContainers() {
 
   const filteredContainers = useMemo(() => {
     return containers.filter((c) => {
+      // El estado se filtra en el navegador, y **antes** que la búsqueda: así el
+      // buscador siempre trabaja sobre lo que se está viendo, que es lo que espera
+      // quien escribe en él.
+      const matchesStatus =
+        statusFilter === 'all' || c.status.toLowerCase() === statusFilter.toLowerCase()
+      if (!matchesStatus) return false
+
       const matchesSearch =
         c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         c.image.toLowerCase().includes(searchQuery.toLowerCase()) ||
         c.id.toLowerCase().includes(searchQuery.toLowerCase())
       return matchesSearch
     })
-  }, [containers, searchQuery])
+  }, [containers, searchQuery, statusFilter])
 
   return {
     containers: filteredContainers,

@@ -331,6 +331,7 @@ def argumentos_accion(
     service: str | None = None,
     follow: bool = True,
     volumes: bool = False,
+    remove_orphans: bool = True,
 ) -> list[str]:
     """Argumentos de `docker compose ... <acción>`.
 
@@ -347,10 +348,17 @@ def argumentos_accion(
         args += ["-p", project_name]
 
     if action == "up":
-        # `-d` es obligatorio: el panel no se adjunta. `--remove-orphans` es lo que
-        # compose v2 ya hace por defecto, y ponerlo explícito hace visible la
-        # intención en el mensaje `start`.
-        args += ["up", "-d", "--remove-orphans"]
+        # `-d` es obligatorio: el panel no se adjunta.
+        args += ["up", "-d"]
+        if remove_orphans:
+            # `--remove-orphans` es lo que compose v2 ya hace por defecto, y ponerlo
+            # explícito hace visible la intención en el mensaje `start`.
+            #
+            # Se puede apagar porque desde el plan el nombre de proyecto puede
+            # chocar con otro, y el flag se llevaría por delante los contenedores
+            # de servicios que no estén en el archivo nuevo: destruir trabajo en
+            # marcha desde un botón que dice "Desplegar" (SPEC-15 §3.3).
+            args.append("--remove-orphans")
     elif action == "logs":
         args.append("logs")
         if follow:
@@ -389,6 +397,7 @@ async def ejecutar_accion(
     service: str | None = None,
     follow: bool = True,
     volumes: bool = False,
+    remove_orphans: bool = True,
 ) -> AsyncIterator[Trozo]:
     """Ejecuta una acción y va emitiendo su salida mientras corre.
 
@@ -403,6 +412,7 @@ async def ejecutar_accion(
         service=service,
         follow=follow,
         volumes=volumes,
+        remove_orphans=remove_orphans,
     )
     cwd = str(Path(path).resolve().parent)
 

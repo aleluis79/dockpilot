@@ -22,11 +22,13 @@ from app.schemas.compose import (
     ComposeProjectSummary,
     ComposeService,
     ComposeVolume,
+    PlannedBuild,
     PlannedMount,
     PlannedNetwork,
     PlannedPort,
     PlannedService,
     PlannedVolume,
+    ProjectCollision,
 )
 from app.services import compose_cli
 
@@ -449,6 +451,7 @@ async def build_plan(docker: aiodocker.Docker, payload: ComposePlanRequest) -> C
         payload.path,
         resultado.stderr,
         await _nombres_existentes(docker, datos),
+        await _colision(docker, _nombre_proyecto(datos, payload.path), ruta),
     )
 
 
@@ -546,11 +549,22 @@ def _mensaje_validacion(stderr: str) -> str:
     return limpio
 
 
+def _nombre_proyecto(datos: dict[str, Any], source_path: str) -> str:
+    """El nombre de proyecto, tal y como lo ha resuelto compose.
+
+    Sale del propio `config` y no del directorio: en el host de referencia
+    `sica/docker-compose.yml` declara `name: simp-sica` y su directorio es `sica`
+    (SPEC-15 §3.4).
+    """
+    return _as_str(datos.get("name")) or Path(source_path).resolve().parent.name
+
+
 def _a_plan(
     datos: dict[str, Any],
     source_path: str,
     stderr: str,
     existentes: dict[str, set[str]],
+    colision: ProjectCollision | None = None,
 ) -> ComposePlan:
     """Proyecta el JSON de `config` al contrato del plan.
 
@@ -558,23 +572,33 @@ def _a_plan(
     así avisa de una variable sin definir (SPEC-12 §3.3).
     """
     servicios = datos.get("services")
+    archivo = Path(source_path)
     return ComposePlan(
-        project_name=_as_str(datos.get("name")) or Path(source_path).resolve().parent.name,
+        project_name=_nombre_proyecto(datos, source_path),
         source_path=source_path,
-        services=[_a_servicio(nombre, raw) for nombre, raw in sorted(_as_dict(servicios).items())],
+        services=[
+            _a_servicio(nombre, raw, archivo) for nombre, raw in sorted(_as_dict(servicios).items())
+        ],
         networks=_a_recursos(datos.get("networks"), PlannedNetwork, existentes),
         volumes=_a_recursos(datos.get("volumes"), PlannedVolume, existentes),
         warnings=_warnings(stderr),
+        proyecto_en_uso=colision,
         resolved_by="docker-compose-cli",
     )
 
 
-def _a_servicio(nombre: str, raw: Any) -> PlannedService:
+def _a_servicio(nombre: str, raw: Any, archivo: Path) -> PlannedService:
     servicio = _as_dict(raw)
     return PlannedService(
         name=nombre,
         image=_as_str_or_none(servicio.get("image")),
-        build=bool(servicio.get("build")),
+        # `build` es el coste, no un booleano: lo que decide el usuario es si
+        # espera ocho minutos, y eso no lo dice un `true` (SPEC-15 §2.1).
+        build=(
+            _estimar_build(servicio.get("build"), archivo)
+            if servicio.get("build") is not None
+            else None
+        ),
         container_name=_as_str_or_none(servicio.get("container_name")),
         command=_as_str_or_none(servicio.get("command")),
         entrypoint=_as_str_or_none(servicio.get("entrypoint")),
@@ -957,3 +981,147 @@ async def browse(path: str | None = None) -> BrowseResult:
         truncado=truncado,
         ocultos=omitidos,
     )
+
+
+# --- SPEC-15: estimar el coste de un `build` ------------------------------------
+#
+# El problema que resuelve: `docker compose up -d` construye las imágenes que no
+# existan, y en el host de referencia los contextos son de 393 MB y 152 MB sin
+# `.dockerignore`. Un botón que dice "Iniciar" y tarda 8 minutos construyendo es
+# una promesa rota, así que el plan dice lo que va a costar antes de arrancar.
+
+
+def _estimar_build(build: Any, archivo: Path) -> PlannedBuild:
+    """Mide el contexto de build de un servicio, sin construir nada.
+
+    El `context` es relativo **al archivo compose**, no al directorio de trabajo
+    del backend: es la regla de compose, y resolverlo de otra forma daría un peso
+    distinto en cada máquina.
+
+    **No aplica `.dockerignore`**, y por eso el campo se llama `bytes_aprox`. Se
+    prefiere sobreestimar: un número alto hace que el usuario pregunte, y uno bajo
+    hace que el `up` tarde 8 minutos sin avisar. Reimplementar el lenguaje de
+    patrones de `.dockerignore` (que es un gitignore) sería más código del que
+    compra.
+    """
+    try:
+        contexto = _contexto_de_build(build, archivo)
+    except _BuildInvalido as error:
+        return PlannedBuild(context="", error=str(error))
+
+    if not contexto.exists():
+        return PlannedBuild(
+            context=str(contexto), error=f"El contexto no existe: {contexto}"
+        )
+    if not contexto.is_dir():
+        return PlannedBuild(
+            context=str(contexto), error=f"El contexto no es un directorio: {contexto}"
+        )
+
+    # `os.walk` con `followlinks=False` y podando los enlaces a mano: un symlink
+    # dentro del contexto puede apuntar al propio contexto, y seguirlo mide dos
+    # veces lo mismo o entra en un bucle. Compose tampoco lo sigue.
+    ficheros = 0
+    total = 0
+    truncado = False
+    for raiz, directorios, nombres in os.walk(contexto, followlinks=False, onerror=lambda _e: None):
+        keep = [d for d in directorios if not os.path.islink(os.path.join(raiz, d))]
+        for nombre in nombres:
+            completa = os.path.join(raiz, nombre)
+            if os.path.islink(completa):
+                continue
+            if ficheros >= settings.COMPOSE_BUILD_ESTIMATE_MAX_FILES:
+                truncado = True
+                break
+            try:
+                total += os.path.getsize(completa)
+            except OSError:
+                # Un fichero que desaparece o sin permiso se salta: la estimación
+                # es un dato aproximado y no puede ser la razón de que el plan
+                # entero falle.
+                continue
+            ficheros += 1
+        if truncado:
+            break
+        directorios[:] = keep
+
+    return PlannedBuild(
+        context=str(contexto),
+        bytes_aprox=total,
+        ficheros_aprox=ficheros,
+        truncado=truncado,
+    )
+
+
+class _BuildInvalido(Exception):
+    """La sección `build` del JSON de compose tiene una forma que no se entiende."""
+
+
+def _contexto_de_build(build: Any, archivo: Path) -> Path:
+    """La ruta del contexto, resuelta contra el directorio del archivo compose.
+
+    Acepta las dos formas que emite `config`: `build: ./ctx` (cadena) y
+    `build: {context: ./ctx}` (mapa). Sin `context`, compose usa el directorio del
+    archivo, que es lo mismo que hace el `else` de aquí.
+    """
+    if isinstance(build, str):
+        crudo = build
+    elif isinstance(build, dict):
+        crudo = build.get("context") or ""
+    elif build is None:
+        crudo = ""
+    else:
+        # Tipo inesperado. Asumir "el directorio entero" mediria lo que no es y
+        # devolveria una cifra enorme sin avisar de nada.
+        raise _BuildInvalido(f"Sección build con un tipo que no se entiende: {type(build).__name__}")
+
+    if not isinstance(crudo, str) or not crudo.strip():
+        return archivo.resolve().parent
+    return (archivo.resolve().parent / crudo).resolve()
+
+
+async def _colision(docker: aiodocker.Docker, nombre: str, source_path: str) -> ProjectCollision | None:
+    """Si otro proyecto del host ya ocupa este nombre de proyecto.
+
+    Que coincida el nombre **no** es un problema en sí: si además coincide el
+    archivo, es un reinicio legítimo. Lo peligroso es que dos compose files
+    distintos se peleen por el mismo nombre, porque los nombres de red y volumen
+    llevan prefijo del proyecto y `container_name` es global en Docker con
+    independencia de él (SPEC-15 §3.5).
+    """
+    if not nombre:
+        return None
+
+    try:
+        index = await _collect(docker)
+    except HTTPException:
+        # El plan es válido aunque no se pueda cruzar con el host, igual que la
+        # lectura de redes y volúmenes de SPEC-12. Sin inventario no se puede
+        # detectar una colisión, y no se bloquea el despliegue por no poder
+        # comprobarlo: el `up` es de compose, y compose avisará.
+        return None
+
+    if nombre not in index.projects:
+        return None
+
+    entry = index.projects[nombre]
+    con_contenedores = sum(len(s["containers"]) for s in entry["services"].values()) > 0
+    if not con_contenedores:
+        # Un proyecto sin contenedores no tiene nada que `--remove-orphans` pueda
+        # borrar: ese flag solo se lleva contenedores de servicios ausentes del
+        # archivo, nunca volúmenes ni redes. Es el caso de los huérfanos del host
+        # de referencia (`simp-sica`, `tickets-app`), y bloquearlos dejaría fuera
+        # precisamente el despliegue que esta spec viene a permitir.
+        return None
+
+    archivos = list(entry["config_files"])
+    if not archivos:
+        # Con contenedores pero sin `config_files` no se puede demostrar que sea
+        # otro archivo. No se bloquea: es un dato que compose no escribió, y
+        # bloquear por sospecha impediría reiniciar un proyecto propio.
+        return None
+
+    if str(Path(source_path).resolve()) in {str(Path(f).resolve()) for f in archivos}:
+        return None
+
+    return ProjectCollision(nombre=nombre, config_files=archivos, mismo_archivo=False)

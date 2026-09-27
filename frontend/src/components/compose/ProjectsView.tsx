@@ -304,6 +304,13 @@ export function ProjectsView({ onNavigateTab, onRefrescar }: ProjectsViewProps) 
           /* La etiqueta `project.config_files` dice dónde está el archivo, así que
              al abrir el Plan desde un proyecto ya se propone su ruta. */
           initialPath={selected?.config_files[0] ?? ''}
+          /* Desplegar desde el plan deja obsoleto el inventario igual que una
+             acción desde la fila: el proyecto recién arrancado ya existe y tiene
+             que verse sin cambiar de pestaña. */
+          onRefrescar={() => {
+            void refetch()
+            onRefrescar?.()
+          }}
         />
       )}
     </div>

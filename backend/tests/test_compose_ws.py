@@ -114,7 +114,7 @@ def test_down_con_volumes_siempre_lleva_el_flag(ws_client, fake_spawn, archivo):
 
 def test_up_lanza_el_comando_con_d_y_sin_build(ws_client, fake_spawn, archivo):
     fake_spawn.devolver(stdout_trozos=[b"Container web Started\n"])
-    with _abrir(ws_client, "up", path=str(archivo)) as ws:
+    with _abrir(ws_client, "up", path=str(archivo), project_name="p") as ws:
         inicio = ws.receive_json()
         salida = ws.receive_json()
         fin = ws.receive_json()
@@ -132,7 +132,7 @@ def test_up_lanza_el_comando_con_d_y_sin_build(ws_client, fake_spawn, archivo):
 
 def test_pull_no_arranca_ningun_contenedor(ws_client, fake_spawn, archivo):
     fake_spawn.devolver(stdout_trozos=[b"descargando\n"])
-    with _abrir(ws_client, "pull", path=str(archivo)) as ws:
+    with _abrir(ws_client, "pull", path=str(archivo), project_name="p") as ws:
         inicio = ws.receive_json()
         ws.receive_json()
         ws.receive_json()
@@ -142,7 +142,7 @@ def test_pull_no_arranca_ningun_contenedor(ws_client, fake_spawn, archivo):
 
 def test_logs_con_seguimiento_lleva_follow(ws_client, fake_spawn, archivo):
     fake_spawn.devolver(stdout_trozos=[b"linea\n"])
-    with _abrir(ws_client, "logs", path=str(archivo), follow="true") as ws:
+    with _abrir(ws_client, "logs", path=str(archivo), project_name="p", follow="true") as ws:
         inicio = ws.receive_json()
         ws.receive_json()
         ws.receive_json()
@@ -151,7 +151,7 @@ def test_logs_con_seguimiento_lleva_follow(ws_client, fake_spawn, archivo):
 
 def test_logs_de_un_servicio_lleva_el_argumento_posicional(ws_client, fake_spawn, archivo):
     fake_spawn.devolver(stdout_trozos=[b"linea\n"])
-    with _abrir(ws_client, "logs", path=str(archivo), service="web") as ws:
+    with _abrir(ws_client, "logs", path=str(archivo), project_name="p", service="web") as ws:
         inicio = ws.receive_json()
         ws.receive_json()
         ws.receive_json()
@@ -163,7 +163,7 @@ def test_logs_de_un_servicio_lleva_el_argumento_posicional(ws_client, fake_spawn
 def test_el_mensaje_start_declara_los_argumentos(ws_client, fake_spawn, archivo):
     # Quien borra algo tiene que poder ver qué se ejecutó.
     fake_spawn.devolver(stdout_trozos=[b"hecho\n"])
-    with _abrir(ws_client, "down", path=str(archivo)) as ws:
+    with _abrir(ws_client, "down", path=str(archivo), project_name="p") as ws:
         inicio = ws.receive_json()
         ws.receive_json()
         ws.receive_json()
@@ -172,7 +172,7 @@ def test_el_mensaje_start_declara_los_argumentos(ws_client, fake_spawn, archivo)
 
 def test_emite_la_salida_por_trozos_con_su_stream(ws_client, fake_spawn, archivo):
     fake_spawn.devolver(stdout_trozos=[b"uno\n", b"dos\n"], stderr_trozos=[b"aviso\n"])
-    with _abrir(ws_client, "up", path=str(archivo)) as ws:
+    with _abrir(ws_client, "up", path=str(archivo), project_name="p") as ws:
         ws.receive_json()  # start
         datos = [ws.receive_json() for _ in range(3)]
         fin = ws.receive_json()
@@ -189,7 +189,7 @@ def test_fallo_de_compose_es_exit_y_no_error(ws_client, fake_spawn, archivo):
     # Un `up` que falla porque el puerto está ocupado NO es un error de DockPilot:
     # el proceso se ejecutó bien, fue compose el que no tuvo éxito.
     fake_spawn.devolver(codigo=1, stdout_trozos=[b"error: port is already allocated\n"])
-    with _abrir(ws_client, "up", path=str(archivo)) as ws:
+    with _abrir(ws_client, "up", path=str(archivo), project_name="p") as ws:
         ws.receive_json()  # start
         ws.receive_json()  # output
         fin = ws.receive_json()
@@ -202,7 +202,7 @@ def test_cli_ausente_devuelve_503(ws_client, fake_spawn, archivo, monkeypatch):
     # Se comprueba ANTES de mandar el `start`: anunciarte los argumentos exactos
     # de algo que no va a ejecutarse sería mentir.
     monkeypatch.setattr("app.api.v1.ws.compose_cli.hay_cli", lambda: False)
-    with _abrir(ws_client, "up", path=str(archivo)) as ws:
+    with _abrir(ws_client, "up", path=str(archivo), project_name="p") as ws:
         mensaje = ws.receive_json()
     assert mensaje["type"] == "error"
     assert mensaje["code"] == 503
@@ -216,7 +216,7 @@ def test_cli_ausente_por_spawn_devuelve_503(ws_client, fake_spawn, archivo, monk
     # salió, y el error explica por qué no llegó a correr.
     monkeypatch.setattr("app.api.v1.ws.compose_cli.hay_cli", lambda: True)
     fake_spawn.fallar_con(FileNotFoundError("docker"))
-    with _abrir(ws_client, "up", path=str(archivo)) as ws:
+    with _abrir(ws_client, "up", path=str(archivo), project_name="p") as ws:
         assert ws.receive_json()["type"] == "start"
         mensaje = ws.receive_json()
     assert mensaje["type"] == "error"
@@ -228,7 +228,7 @@ def test_timeout_devuelve_504_y_termina_el_proceso(
 ):
     fake_spawn.devolver(cuelga=True)
     monkeypatch.setattr("app.services.compose_cli.TIMEOUTS_S", {"up": 0.05})
-    with _abrir(ws_client, "up", path=str(archivo)) as ws:
+    with _abrir(ws_client, "up", path=str(archivo), project_name="p") as ws:
         ws.receive_json()  # start
         mensaje = ws.receive_json()
     assert mensaje["type"] == "error"
@@ -242,7 +242,7 @@ def test_timeout_devuelve_504_y_termina_el_proceso(
 
 def test_cancelacion_termina_el_proceso_y_emite_exit(ws_client, fake_spawn, archivo):
     fake_spawn.devolver(stdout_trozos=[b"una linea\n"], cuelga_solo="stdout")
-    with _abrir(ws_client, "logs", path=str(archivo)) as ws:
+    with _abrir(ws_client, "logs", path=str(archivo), project_name="p") as ws:
         assert ws.receive_json()["type"] == "start"
         assert ws.receive_json()["type"] == "output"
         # `--follow` no termina nunca: el panel cancela.
@@ -263,7 +263,7 @@ def test_desconexion_termina_el_proceso(ws_client, fake_spawn, archivo):
     # invariante que importa es que el proceso muera, no la carrera del portal.
     fake_spawn.devolver(stdout_trozos=[b"una linea\n"], cuelga_solo="stdout")
     with contextlib.suppress(Exception, CancelledError):
-        with _abrir(ws_client, "logs", path=str(archivo)) as ws:
+        with _abrir(ws_client, "logs", path=str(archivo), project_name="p") as ws:
             ws.receive_json()  # start
             ws.receive_json()  # output
 
@@ -281,7 +281,7 @@ def test_el_entorno_del_hijo_no_hereda_el_del_backend(ws_client, fake_spawn, arc
     monkeypatch.setenv("COMPOSE_PROJECT_NAME", "del-servidor")
     fake_spawn.devolver(stdout_trozos=[b"hecho\n"])
 
-    with _abrir(ws_client, "up", path=str(archivo)) as ws:
+    with _abrir(ws_client, "up", path=str(archivo), project_name="p") as ws:
         ws.receive_json()
         ws.receive_json()
         ws.receive_json()
@@ -296,10 +296,110 @@ def test_no_pasa_shell(ws_client, spawn_call, archivo, monkeypatch):
     # que un argumento se reintercale como línea de shell. Sin `fake_spawn` a
     # propósito: el doble del proceso cortocircuitaría justo lo que se observa.
     monkeypatch.setattr("app.api.v1.ws.compose_cli.hay_cli", lambda: True)
-    with _abrir(ws_client, "up", path=str(archivo)) as ws:
+    with _abrir(ws_client, "up", path=str(archivo), project_name="p") as ws:
         ws.receive_json()
         ws.receive_json()
         ws.receive_json()
 
     assert spawn_call, "el proceso debería haberse creado"
     assert "shell" not in spawn_call[0]
+
+
+# --- SPEC-15: `remove_orphans` y `project_name` obligatorio ---------------------
+
+
+def _drenar(ws) -> dict:
+    """Lee el canal hasta el `exit` y lo devuelve."""
+    while True:
+        mensaje = ws.receive_json()
+        if mensaje.get("type") in ("exit", "error"):
+            return mensaje
+
+
+def test_up_desde_una_fila_si_lleva_remove_orphans(ws_client, fake_spawn, archivo):
+    """En el inventario el flag se mantiene: es lo correcto al operar lo que ya es tuyo."""
+    with _abrir(ws_client, "up", path=str(archivo), project_name="mio") as ws:
+        _drenar(ws)
+
+    assert fake_spawn.calls[-1].args == [
+        "docker", "compose", "-f", str(archivo), "-p", "mio",
+        "up", "-d", "--remove-orphans",
+    ]
+
+
+def test_up_desde_el_plan_no_lleva_remove_orphans(ws_client, fake_spawn, archivo):
+    """Sin este flag, un nombre que choca con otro proyecto borra contenedores vivos.
+
+    `up --remove-orphans` se lleva por delante los servicios que no estén en el
+    archivo nuevo, y desde un botón que dice "Desplegar" eso destruye trabajo sin
+    avisar (SPEC-15 §3.3).
+    """
+    with _abrir(
+        ws_client, "up", path=str(archivo), project_name="nuevo", remove_orphans="false"
+    ) as ws:
+        _drenar(ws)
+
+    args = fake_spawn.calls[-1].args
+    assert "--remove-orphans" not in args
+    # El resto de la orden es idéntica: cambia el flag y nada más.
+    assert args == ["docker", "compose", "-f", str(archivo), "-p", "nuevo", "up", "-d"]
+
+
+def test_remove_orphans_no_afecta_a_las_otras_acciones(ws_client, fake_spawn, archivo):
+    """`down` y `stop` nunca han llevado ese flag, y no deben empezar a llevarlo."""
+    with _abrir(
+        ws_client, "down", path=str(archivo), project_name="mio", remove_orphans="true"
+    ) as ws:
+        _drenar(ws)
+
+    assert "--remove-orphans" not in fake_spawn.calls[-1].args
+
+
+def test_sin_project_name_devuelve_400(ws_client, fake_spawn, archivo):
+    """Deducirlo del directorio es incorrecto: compose lee `name:` del archivo.
+
+    En el host de referencia `sica/docker-compose.yml` declara `name: simp-sica` y
+    su directorio es `sica`, así que adivinar miraría el proyecto equivocado
+    (SPEC-15 §3.4).
+    """
+    with _abrir(ws_client, "up", path=str(archivo)) as ws:
+        mensaje = ws.receive_json()
+
+    assert mensaje["type"] == "error"
+    assert mensaje["code"] == 400
+    assert "nombre de proyecto" in mensaje["message"].lower()
+    # Y lo importante: no se ha lanzado nada.
+    assert fake_spawn.calls == []
+
+
+def test_project_name_vacio_tambien_se_rechaza(ws_client, fake_spawn, archivo):
+    with _abrir(ws_client, "up", path=str(archivo), project_name="") as ws:
+        mensaje = ws.receive_json()
+
+    assert mensaje["type"] == "error"
+    assert mensaje["code"] == 400
+    assert fake_spawn.calls == []
+
+
+def test_el_nombre_recibido_es_el_que_manda(ws_client, fake_spawn, archivo):
+    """No se vuelve a deducir por el camino: lo que llega es lo que se usa."""
+    with _abrir(ws_client, "up", path=str(archivo), project_name="simp-sica") as ws:
+        primero = ws.receive_json()
+
+    assert primero["type"] == "start"
+    assert primero["project"] == "simp-sica"
+    args = fake_spawn.calls[-1].args
+    # Lo que va tras -p es el nombre recibido, no el del directorio del archivo.
+    assert args[args.index("-p") + 1] == "simp-sica"
+
+
+def test_una_accion_invalida_sigue_ganando_a_la_falta_de_nombre(ws_client, fake_spawn):
+    """El orden de las validaciones no cambia: primero la acción, luego el nombre.
+
+    Un 404 de acción desconocida no debería costar ni una llamada al sistema de
+    archivos, y menos aún una queja sobre el nombre del proyecto.
+    """
+    with _abrir(ws_client, "rm", path="/p/dc.yml") as ws:
+        mensaje = ws.receive_json()
+
+    assert mensaje["code"] == 404

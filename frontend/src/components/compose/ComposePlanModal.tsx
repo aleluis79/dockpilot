@@ -3,6 +3,7 @@ import { useState } from 'react'
 import {
   X,
   AlertTriangle,
+  Rocket,
   RefreshCw,
   CheckCircle2,
   FolderSearch,
@@ -14,6 +15,8 @@ import { MODAL_OVERLAY } from '../ui/modalOverlay'
 import { dockerApi } from '../../services/dockerApi'
 import { ComposeEditor } from './ComposeEditor'
 import { ComposeFilePicker } from './ComposeFilePicker'
+import { ComposeDeployDialog } from './ComposeDeployDialog'
+import { ComposeActionPanel } from './ComposeActionPanel'
 import type { ComposePlan, PlannedMount, PlannedPort, PlannedService } from '../../types/compose'
 
 interface ComposePlanModalProps {
@@ -21,6 +24,14 @@ interface ComposePlanModalProps {
   onClose: () => void
   /** Ruta sugerida, por ejemplo la del proyecto abierto. */
   initialPath?: string
+  /**
+   * Recarga el inventario de proyectos.
+   *
+   * Sin esto, desplegar desde el plan dejaba la tabla de «Proyectos» obsoleta:
+   * el proyecto recién arrancado ya tiene etiquetas y existe, pero no se veía
+   * hasta cambiar de pestaña (SPEC-15 §3.8).
+   */
+  onRefrescar?: () => void
 }
 
 function Puertos({ ports }: { ports: PlannedPort[] }) {
@@ -183,13 +194,25 @@ function Recurso({
  * el host. No hay ningún botón de `up`, `down` ni `build`: si algún día lo hay,
  * el alcance ha cambiado y la spec también (SPEC-12 §1).
  */
-export function ComposePlanModal({ open, onClose, initialPath = '' }: ComposePlanModalProps) {
+export function ComposePlanModal({
+  open,
+  onClose,
+  initialPath = '',
+  onRefrescar,
+}: ComposePlanModalProps) {
   const [path, setPath] = useState<string>(initialPath)
   const [content, setContent] = useState<string>('')
   const [plan, setPlan] = useState<ComposePlan | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState<boolean>(false)
   const [eligiendo, setEligiendo] = useState<boolean>(false)
+  const [pidiendoCoste, setPidiendoCoste] = useState<boolean>(false)
+  const [desplegando, setDesplegando] = useState<boolean>(false)
+
+  // El editor guarda su propio texto, y el despliegue usa el archivo del disco:
+  // sin esta diferencia, se desplegaría algo que no está guardado (SPEC-15 §3.7).
+  const sinGuardar = content.trim() !== ''
+  const bloqueadoPorColision = Boolean(plan?.proyecto_en_uso && !plan.proyecto_en_uso.mismo_archivo)
 
   if (!open) return null
 
@@ -303,6 +326,53 @@ export function ComposePlanModal({ open, onClose, initialPath = '' }: ComposePla
             <div className="min-w-0">
               {plan ? (
                 <div className="space-y-4" data-testid="compose-plan">
+                  {plan.proyecto_en_uso && !plan.proyecto_en_uso.mismo_archivo && (
+                    <p
+                      data-testid="compose-colision"
+                      className="text-xs text-red-400 border border-red-500/30 bg-red-500/5 rounded-lg p-2.5 leading-relaxed"
+                    >
+                      <AlertTriangle className="w-3.5 h-3.5 inline mr-1 align-[-2px]" />
+                      Ya existe un proyecto llamado{' '}
+                      <strong className="font-mono">{plan.proyecto_en_uso.nombre}</strong> que
+                      viene de otro archivo (
+                      <span className="font-mono">
+                        {plan.proyecto_en_uso.config_files.join(', ')}
+                      </span>
+                      ). No se puede desplegar este: los dos archivos pelearían por el
+                      mismo nombre, y <code className="font-mono">container_name</code>{' '}
+                      es global en Docker.
+                    </p>
+                  )}
+
+                  {sinGuardar && (
+                    <p className="text-[11px] text-fg-subtle">
+                      Hay cambios sin guardar en el editor. El despliegue usa el
+                      archivo del disco, que no es lo que hay aquí: guarda o descarta
+                      los cambios primero.
+                    </p>
+                  )}
+                  {!sinGuardar && plan.proyecto_en_uso?.mismo_archivo && (
+                    <p className="text-[11px] text-fg-subtle">
+                      Este proyecto ya está en marcha. Desplegar lo reinicia.
+                    </p>
+                  )}
+
+                  {!bloqueadoPorColision && (
+                    <button
+                      type="button"
+                      // Deshabilitado y no escondido: se ve que la acción existe y
+                      // por qué no está disponible ahora mismo.
+                      disabled={sinGuardar}
+                      onClick={() =>
+                        tieneBuild(plan) ? setPidiendoCoste(true) : setDesplegando(true)
+                      }
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-blue-600"
+                    >
+                      <Rocket className="w-3.5 h-3.5" />
+                      Desplegar
+                    </button>
+                  )}
+
                   <p
                     data-testid="resolved-by"
                     className="text-[10px] text-fg-subtle flex items-center gap-1.5"
@@ -425,6 +495,31 @@ export function ComposePlanModal({ open, onClose, initialPath = '' }: ComposePla
 
       {/* El explorador va fuera del `div` del modal: es otro dialogo, y anidarlo
           haria que al cerrarlo se cerrara tambien la previsualizacion. */}
+      {desplegando && plan && (
+        <ComposeActionPanel
+          project={plan.project_name}
+          path={plan.source_path}
+          accionInicial="up"
+          // Sin `--remove-orphans`: este nombre puede chocar con otro proyecto y
+          // el flag se llevaría contenedores ajenos (SPEC-15 §3.3).
+          removeOrphans={false}
+          onClose={() => setDesplegando(false)}
+          onRefrescar={onRefrescar}
+        />
+      )}
+
+      {plan && (
+        <ComposeDeployDialog
+          open={pidiendoCoste}
+          plan={plan}
+          onCancel={() => setPidiendoCoste(false)}
+          onConfirm={() => {
+            setPidiendoCoste(false)
+            setDesplegando(true)
+          }}
+        />
+      )}
+
       <ComposeFilePicker
         open={eligiendo}
         onClose={() => setEligiendo(false)}
@@ -438,4 +533,15 @@ export function ComposePlanModal({ open, onClose, initialPath = '' }: ComposePla
       />
     </div>
   )
+}
+
+/**
+ * Si algún servicio del plan va a construirse, y por tanto hay que avisar.
+ *
+ * Comprobación por valor y no `!== null`: un `build` ausente llega como
+ * `undefined` en los datos viejos, y `undefined !== null` es `true`, así que
+ * cualquier plan sin coste acabaría preguntando por un build inexistente.
+ */
+function tieneBuild(plan: ComposePlan): boolean {
+  return plan.services.some((servicio) => Boolean(servicio.build))
 }

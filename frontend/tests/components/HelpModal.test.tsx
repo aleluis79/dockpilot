@@ -124,6 +124,24 @@ describe('HelpModal', () => {
     ).toBeInTheDocument()
   })
 
+  it('documenta que Desplegar avisa del coste de construir', () => {
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/pestañas/i)
+
+    // Sin esto, un "Desplegar" que tarda 8 minutos construyendo se lee como que
+    // el panel está colgado.
+    expect(contenido().getByText(/antes de\s+hacerlo/i)).toBeInTheDocument()
+  })
+
+  it('explica el bloqueo por nombre de proyecto ocupado', () => {
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/si algo no funciona/i)
+
+    expect(
+      contenido().getByRole('heading', { name: /nombre está ocupado/i })
+    ).toBeInTheDocument()
+  })
+
   it('explica que compose puede faltar sin que se rompa el inventario', () => {
     render(<HelpModal open onClose={vi.fn()} />)
     irA(/no funciona/i)

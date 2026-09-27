@@ -21,6 +21,10 @@ import { HelpModal } from './components/help/HelpModal'
 import type { LocalImageSummary } from './types/image'
 
 function App() {
+  // Antes que `useContainers`: el hook necesita saber si su vista está a la
+  // vista, y el estado de la pestaña se declara aquí.
+  const [activeView, setActiveView] = useState<ClaveVista>('containers')
+
   const {
     containers,
     rawContainers,
@@ -33,7 +37,7 @@ function App() {
     actionInProgress,
     refetch,
     executeAction,
-  } = useContainers()
+  } = useContainers({ activo: activeView === 'containers' })
 
   const [selectedContainer, setSelectedContainer] = useState<ContainerSummary | null>(null)
   const [containerToDelete, setContainerToDelete] = useState<ContainerSummary | null>(null)
@@ -41,7 +45,6 @@ function App() {
   const [containerForStats, setContainerForStats] = useState<ContainerSummary | null>(null)
   const [containerForTerminal, setContainerForTerminal] = useState<ContainerSummary | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false)
-  const [activeView, setActiveView] = useState<ClaveVista>('containers')
   const [presetImage, setPresetImage] = useState<string>('')
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false)
 

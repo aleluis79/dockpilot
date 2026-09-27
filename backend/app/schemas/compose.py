@@ -125,6 +125,37 @@ class PlannedMount(BaseModel):
     read_only: bool = False
 
 
+class PlannedBuild(BaseModel):
+    """Lo que va a costar construir este servicio, sin construirlo.
+
+    `bytes_aprox` es una **estimacion**: no aplica `.dockerignore`, asi que
+    normalmente **sobreestima**, y por eso lleva `_aprox` en el nombre. Se
+    prefiere sobreestimar a ser falsamente preciso: un numero alto hace
+    preguntar, uno bajo hace que el `up` tarde 8 minutos sin avisar (SPEC-15 §2.1).
+    """
+
+    context: str = Field(..., description="Ruta absoluta del contexto, resuelta contra el archivo")
+    bytes_aprox: int = Field(0, description="Bytes del contexto sin aplicar .dockerignore")
+    ficheros_aprox: int = Field(0, description="Ficheros contados en el recorrido")
+    truncado: bool = Field(False, description="Se alcanzo el tope de ficheros al medir")
+    error: str | None = Field(
+        None,
+        description="Por que no se pudo medir: no existe, sin permisos, no es un directorio",
+    )
+
+
+class ProjectCollision(BaseModel):
+    """Otro proyecto del host ya ocupa este nombre de proyecto.
+
+    `mismo_archivo` distingue un reinicio legitimo de dos compose files
+    peleandose por el mismo nombre, que no se pueden fusionar (SPEC-15 §3.5).
+    """
+
+    nombre: str
+    config_files: list[str] = Field(default_factory=list)
+    mismo_archivo: bool
+
+
 class PlannedService(BaseModel):
     """Un servicio del plan.
 
@@ -135,7 +166,9 @@ class PlannedService(BaseModel):
 
     name: str
     image: str | None = None
-    build: bool = Field(False, description="El servicio declara una sección build")
+    build: PlannedBuild | None = Field(
+        None, description="Coste de construir, o None si el servicio no declara build"
+    )
     container_name: str | None = None
     command: str | None = None
     entrypoint: str | None = None
@@ -192,6 +225,10 @@ class ComposePlan(BaseModel):
         default_factory=list,
         description="stderr de compose con código 0: el archivo es válido pero tiene avisos",
     )
+    proyecto_en_uso: ProjectCollision | None = Field(
+        None,
+        description="Proyecto existente con este nombre desde otro archivo. Bloquea el despliegue",
+    )
     resolved_by: Literal["docker-compose-cli"] = Field(
         default="docker-compose-cli",
         description=(
@@ -214,7 +251,21 @@ class ComposeCommandRequest(BaseModel):
     path: str = Field(
         ..., min_length=1, description="Ruta absoluta de un archivo compose"
     )
-    project_name: str | None = Field(None, description="Nombre de proyecto (-p)")
+    project_name: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "Nombre de proyecto (-p). Obligatorio porque deducirlo del directorio es "
+            "incorrecto: compose lee `name:` del archivo (SPEC-15 §3.4)"
+        ),
+    )
+    remove_orphans: bool = Field(
+        True,
+        description=(
+            "`up --remove-orphans`. False en el despliegue desde el plan, donde el "
+            "nombre puede chocar con otro proyecto (SPEC-15 §3.3)"
+        ),
+    )
     service: str | None = Field(
         None, description="Restringe la acción a un servicio. Posicional, no flag."
     )

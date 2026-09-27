@@ -56,7 +56,7 @@ Todo desarrollo en DockPilot sigue rigurosamente el ciclo SDD de 5 etapas:
 - **Superficies no HTML** (xterm.js, barras de scroll) leen los tokens por JavaScript o por variables CSS, nunca por hexadecimales fijos.
 - Especificación completa en `specs/06-theme-switcher.md`.
 
-### Docker Compose (SPEC-11 a SPEC-14)
+### Docker Compose (SPEC-11 a SPEC-15)
 - **El Engine API no tiene noción de proyecto compose.** Un proyecto existe únicamente como convención de etiquetas `com.docker.compose.*` sobre contenedores, redes y volúmenes. `docker compose ls` **no sirve** para inventariar: en el host de referencia devuelve un solo proyecto y omite los huérfanos, que son justo los que hay que detectar.
 - **SPEC-11 es solo lectura y no necesita el CLI de compose.** Se apoya solo en etiquetas, así que el inventario funciona entero aunque `docker compose` no esté instalado.
 
@@ -70,6 +70,15 @@ Tres reglas que **no se pueden relajar** sin romper el modelo de seguridad:
 3. **Sin `path` se devuelve la raíz, y la raíz la dice el backend.** El cliente no puede deducirla: `~` apunta al home del usuario del **backend**, no al del navegador. Si el cliente calculara la raíz por su cuenta, la regla de confinamiento estaría en dos sitios y tarde o temprano discreparían.
 
 `path` **relativa** da `400`, fuera de la raíz da `403`, y el `403` usa el mismo mensaje exista o no el destino: si se distinguieran, el endpoint serviría para mapear el disco probando rutas y leyendo códigos de respuesta.
+
+#### Desplegar desde el plan: `project_name` es obligatorio (SPEC-15)
+El WebSocket de compose **exige** `project_name` y devuelve `400` si falta. No es rigidez por gusto: compose deduce el nombre de la etiqueta `name:` del **archivo**, no del directorio, y en el host de referencia `sica/docker-compose.yml` declara `name: simp-sica` con el directorio `sica`. La función que adivinaba por directorio se borró en SPEC-15; las dos únicas fuentes que existen —el inventario y el plan— ya conocen el nombre, porque el plan lo saca del propio `config`.
+
+Se valida **dentro del handler** y no con `Query(...)` en la firma: un parámetro obligatorio que falta hace que FastAPI cierre la conexión del WebSocket antes de que el handler pueda devolver un `400` legible.
+
+`--remove-orphans` se puede apagar por petición, y el despliegue desde el plan lo hace. El flag solo se lleva contenedores de servicios ausentes del archivo, y en el camino del plan el nombre puede chocar con otro proyecto. Un proyecto **huérfano** (cero contenedores) nunca bloquea: no hay contenedores que perder, y bloquearlo dejaría fuera justo el despliegue que la spec vino a permitir.
+
+`PlannedService.build` **no es un booleano**: es el coste estimado del contexto, con `bytes_aprox`, `ficheros_aprox`, `truncado` y `error`. La estimación **no aplica `.dockerignore`** y sobreestima a propósito, porque un número alto hace que el usuario pregunte y uno bajo hace que el `up` tarde 8 minutos sin avisar. Si el contexto no se puede medir, se dice en `error`: un `0` mudo se lee como "no pesa".
 
 #### `app/services/compose_cli.py`: el único módulo que lanza procesos
 El backend **dejó de ser cliente puro del Engine API** en SPEC-12. A partir de ahí este módulo es el **único** sitio con permiso para invocar procesos externos, y SPEC-13 solo le añade un modo de streaming. Si alguna vez hace falta otro proceso, se añade aquí y en ningún otro sitio.
@@ -103,6 +112,17 @@ SPEC-13 amplía el runner con un **modo streaming** sobre el mismo núcleo, no u
 **Trampa del daemon**: `/volumes` devuelve `Labels: null` donde `/networks` y `/containers/json` devuelven `{}`. Normalizar con `_labels()` antes de leer.
 **SPEC-13 reutiliza este runner** y no abre un segundo camino de ejecución. El canal es **uno solo** (`/ws/compose/{action}`, con la acción validada contra una lista cerrada) y no cinco: cinco handlers casi idénticos serían cinco sitios donde olvidar el `finally` que mata el proceso.
 
+#### Trampa: un hook en `App` no se desmonta al cambiar de pestaña
+`useContainers` se llama desde `App`, no desde una vista, así que **vive todo el tiempo que la app**. Solo pedía datos al montarse y al cambiar el filtro de estado, nunca al cambiar de pestaña. El síntoma era desconcertante: desplegar un proyecto desde «Proyectos» dejaba la lista de contenedores obsoleta y los contenedores nuevos no aparecían hasta tocar el filtro, porque eso era lo único que disparaba un refetch.
+
+Las otras vistas no tienen el problema: `VolumesView`, `NetworksView` y `ProjectsView` son componentes que piden sus datos al montarse, así que se recargan al volver a su pestaña.
+
+La regla que se sigue ahora: **un hook que pinte una vista recibe `activo` y refresca al activarse**, saltando la primera vez para no duplicar la carga inicial, y con el `refetch` en un ref para no re-dispararse en cada cambio de filtro.
+
+No se movió el hook a una vista propia a propósito: `App` tiene siete estados de modales de contenedores (detalle, logs, stats, terminal, borrado, alta) que habría que subir o mover, y el arreglo/refresco cubre el bug sin tocar ese refactor.
+
+Y hay una regla fácil de romper en el mismo hook: **el filtro de estado se aplica en el navegador, no en el servidor**. El backend lo admite (`GET /containers?status=...`), pero pedir solo los de un estado hacía que los contadores de las pills bailaran —se calculan sobre la lista completa, así que al elegir «Activos» el contador de «Todos» marcaba el número de activos y los otros dos caían a cero— y convertía cada clic en un filtro en una ida y vuelta al daemon. Los contadores son un censo del host, no un recuento de lo que se está viendo.
+
 ### Backend
 - **Framework**: FastAPI (Python 3.12+).
 - **Servidor ASGI**: Uvicorn con soporte `uvloop`.
@@ -134,7 +154,8 @@ dockpilot/
 │   ├── 11-compose-inventory.md  # Spec: Inventario de proyectos compose (solo lectura, por labels)
 │   ├── 12-compose-plan.md       # Spec: Lectura y previsualización de archivos compose (1er subprocess)
 │   ├── 13-compose-lifecycle.md  # Spec: Ciclo de vida de proyectos compose (up/stop/down/pull/logs)
-│   └── 14-compose-file-browser.md # Spec: Explorador de archivos compose (elegir ruta sin copiarla)
+│   ├── 14-compose-file-browser.md # Spec: Explorador de archivos compose (elegir ruta sin copiarla)
+│   └── 15-compose-deploy-from-plan.md # Spec: Desplegar un compose file desde el plan (up, coste de build)
 ├── backend/
 │   ├── app/
 │   │   ├── api/
@@ -204,7 +225,8 @@ dockpilot/
 │   │   │   ├── system/            # SystemSummaryBar, SystemDetailPanel
 │   │   │   ├── compose/           # ProjectsView, ProjectsTable, ProjectDetailModal, ComposeBadge,
 │   │   │   │                     # ComposePlanModal, ComposeEditor, ComposeActionPanel,
-│   │   │   │                     # ComposeDownDialog, ComposeLogsViewer, ComposeFilePicker
+│   │   │   │                     # ComposeDownDialog, ComposeLogsViewer, ComposeFilePicker,
+│   │   │                     # ComposeActionPanel, ComposeDeployDialog
 │   │   │   └── help/              # HelpModal
 │   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats, useTheme, useImagePull,
 │   │   │                         # useNetworks, useSystemOverview, useComposeProjects, useComposeCommand

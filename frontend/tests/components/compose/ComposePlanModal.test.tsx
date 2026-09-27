@@ -11,7 +11,7 @@ const plan: ComposePlan = {
     {
       name: 'elasticsearch',
       image: 'docker.elastic.co/elasticsearch/elasticsearch:9.1.3',
-      build: false,
+      build: null,
       container_name: 'elasticsearch',
       command: null,
       entrypoint: null,
@@ -32,7 +32,13 @@ const plan: ComposePlan = {
     {
       name: 'api',
       image: 'mi/api:1.0',
-      build: true,
+      build: {
+        context: '/p/api',
+        bytes_aprox: 393_000_000,
+        ficheros_aprox: 19_045,
+        truncado: false,
+        error: null,
+      },
       container_name: null,
       command: null,
       entrypoint: null,
@@ -237,9 +243,174 @@ describe('ComposePlanModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
 
     await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+    // SPEC-12 decía que el preview no muta el host, y sigue siendo cierto: lo
+    // que cambió en SPEC-15 es que aparece un «Desplegar» que **no ejecuta nada
+    // por su cuenta**, solo abre el panel de acción. Lo que no puede haber son
+    // botones de ciclo de vida dentro del propio plan.
     expect(screen.queryByRole('button', { name: /^levantar$/i })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /desplegar/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /bajar/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^parar$/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^construir$/i })).not.toBeInTheDocument()
+    // Y un solo «Desplegar»: no hay atajo alternativo que se parezca.
+    expect(screen.getAllByRole('button', { name: /^desplegar$/i })).toHaveLength(1)
+  })
+
+
+  // --- SPEC-15: desplegar el archivo que todavía no está en marcha --------------
+
+  it('ofrece Desplegar y abre el panel de acción con el nombre del plan', async () => {
+    mockOk({
+      ...plan,
+      services: plan.services.map((s) => ({ ...s, build: null })),
+    })
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText(/ruta del archivo/i), {
+      target: { value: '/p/docker-compose.yml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /desplegar/i }))
+
+    // El nombre es el que resolvió compose, no el del directorio: en el host de
+    // referencia `sica/docker-compose.yml` declara `name: simp-sica`.
+    const panel = await screen.findByTestId('compose-action-panel')
+    expect(panel).toHaveAttribute('data-project', 'elasticsearch-local')
+    expect(panel).toHaveAttribute('data-remove-orphans', 'false')
+  })
+
+  it('no ejecuta ninguna acción al previsualizar', async () => {
+    const fetchMock = mockOk()
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText(/ruta del archivo/i), {
+      target: { value: '/p/docker-compose.yml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+
+    // Previsualizar es de lectura. Nada de ciclo de vida hasta que se pulse.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('los cambios sin guardar bloquean el despliegue', async () => {
+    mockOk({
+      ...plan,
+      services: plan.services.map((s) => ({ ...s, build: null })),
+    })
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText(/ruta del archivo/i), {
+      target: { value: '/p/docker-compose.yml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+    fireEvent.change(screen.getByTestId('compose-editor'), {
+      target: { value: 'services:\n  nuevo:\n    image: x' },
+    })
+
+    const boton = screen.getByRole('button', { name: /desplegar/i })
+    expect(boton).toBeDisabled()
+    // Y se dice por qué: el despliegue usa el archivo del disco.
+    expect(screen.getByText(/sin guardar/i)).toBeInTheDocument()
+  })
+
+  it('con build pregunta el coste antes de desplegar', async () => {
+    mockOk({
+      ...plan,
+      services: [
+        {
+          ...plan.services[0],
+          name: 'api',
+          build: {
+            context: '/p/app',
+            bytes_aprox: 393_000_000,
+            ficheros_aprox: 19000,
+            truncado: false,
+            error: null,
+          },
+        },
+      ],
+    })
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText(/ruta del archivo/i), {
+      target: { value: '/p/docker-compose.yml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /desplegar/i }))
+
+    // El panel de acción no se abre todavía: primero se responde al coste.
+    expect(await screen.findByRole('dialog', { name: /construir/i })).toBeInTheDocument()
+    expect(screen.queryByTestId('compose-action-panel')).not.toBeInTheDocument()
+  })
+
+  it('sin build va directo al panel de acción', async () => {
+    mockOk({
+      ...plan,
+      services: plan.services.map((s) => ({ ...s, build: null })),
+    })
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText(/ruta del archivo/i), {
+      target: { value: '/p/docker-compose.yml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: /desplegar/i }))
+
+    expect(await screen.findByTestId('compose-action-panel')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: /construir/i })).not.toBeInTheDocument()
+  })
+
+  it('una colisión de nombre bloquea el despliegue y lo explica', async () => {
+    mockOk({
+      ...plan,
+      proyecto_en_uso: {
+        nombre: 'elasticsearch-local',
+        config_files: ['/otro/lugar/docker-compose.yml'],
+        mismo_archivo: false,
+      },
+    })
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText(/ruta del archivo/i), {
+      target: { value: '/p/docker-compose.yml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+
+    expect(screen.queryByRole('button', { name: /^desplegar$/i })).not.toBeInTheDocument()
+    expect(screen.getByTestId('compose-colision')).toHaveTextContent('/otro/lugar/docker-compose.yml')
+  })
+
+  it('la colisión con el mismo archivo no bloquea nada', async () => {
+    mockOk({
+      ...plan,
+      proyecto_en_uso: {
+        nombre: 'elasticsearch-local',
+        config_files: ['/p/docker-compose.yml'],
+        mismo_archivo: true,
+      },
+    })
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText(/ruta del archivo/i), {
+      target: { value: '/p/docker-compose.yml' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+
+    expect(screen.getByRole('button', { name: /^desplegar$/i })).toBeInTheDocument()
+    expect(screen.queryByTestId('compose-colision')).not.toBeInTheDocument()
+  })
+
+  it('sin plan no hay botón de desplegar', () => {
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    expect(screen.queryByRole('button', { name: /desplegar/i })).not.toBeInTheDocument()
   })
 
   it('indica de dónde viene el plan', async () => {
