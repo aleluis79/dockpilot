@@ -27,6 +27,23 @@
   --color-fg-subtle: var(--dp-fg-subtle);
   --color-default: var(--dp-border);
   --color-strong: var(--dp-border-strong);
+
+  /* Paleta de gráficas (SPEC-16 §2.1).
+     Semántica y no decorativa: el significado de un color es el mismo en toda
+     la aplicación, y por eso se declara una vez. Sin esto, una barra por
+     categorías saldría gris sobre gris y no distinguiría nada.
+
+     Los tonos son los mismos tres niveles que `StatsModal` ya usa para
+     emerald / amber / rose, más un azul y un violeta, para que el resumen del
+     host y el de estadísticas hablen el mismo idioma de color. */
+  --color-chart-running: var(--dp-chart-running);
+  --color-chart-stopped: var(--dp-chart-stopped);
+  --color-chart-paused: var(--dp-chart-paused);
+  --color-chart-images: var(--dp-chart-images);
+  --color-chart-containers: var(--dp-chart-containers);
+  --color-chart-volumes: var(--dp-chart-volumes);
+  --color-chart-cache: var(--dp-chart-cache);
+  --color-chart-reclaimable: var(--dp-chart-reclaimable);
 }
 
 /* Valores por defecto = tema OSCURO, para que la interfaz no cambie de
@@ -44,6 +61,17 @@
   --dp-fg-subtle: #71717a; /* zinc-600 */
   --dp-border: #27272a; /* zinc-800 */
   --dp-border-strong: #3f3f46; /* zinc-700 */
+
+  /* Gráficas. En oscuro se subir la luminosidad para que un tramo se distinga
+     de `elevated`, que es donde vive la barra. */
+  --dp-chart-running: #34d399; /* emerald-400 */
+  --dp-chart-stopped: #a1a1aa; /* zinc-400 */
+  --dp-chart-paused: #fbbf24; /* amber-400 */
+  --dp-chart-images: #60a5fa; /* blue-400 */
+  --dp-chart-containers: #a78bfa; /* violet-400 */
+  --dp-chart-volumes: #f472b6; /* pink-400 */
+  --dp-chart-cache: #94a3b8; /* slate-400 */
+  --dp-chart-reclaimable: #fb923c; /* orange-400 */
 }
 
 /* Tema claro: se aplica por ausencia de la clase `dark`, no con una clase
@@ -59,6 +87,17 @@ html:not(.dark) {
   --dp-fg-subtle: #a1a1aa; /* zinc-400 */
   --dp-border: #e4e4e7; /* zinc-200 */
   --dp-border-strong: #d4d4d8; /* zinc-300 */
+
+  /* En claro se oscurecen: sobre `elevated`, que aquí es casi blanco, un tono
+     de 400 se lava. Por eso el par no es el mismo tono con otra opacidad. */
+  --dp-chart-running: #047857; /* emerald-600 */
+  --dp-chart-stopped: #71717a; /* zinc-600 */
+  --dp-chart-paused: #b45309; /* amber-600 */
+  --dp-chart-images: #1d4ed8; /* blue-700 */
+  --dp-chart-containers: #6d28d9; /* violet-700 */
+  --dp-chart-volumes: #be185d; /* pink-700 */
+  --dp-chart-cache: #475569; /* slate-600 */
+  --dp-chart-reclaimable: #c2410c; /* orange-700 */
 }
 
 /* Barras de desplazamiento derivadas de los tokens */

@@ -240,6 +240,14 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                     <strong className="text-fg">Bajar</strong> es lo que lo limpia.
                     <br />
                     <br />
+                    La franja de resumen de arriba también se abre: el detalle del
+                    host reparte el espacio entre imágenes, volúmenes, caché y
+                    contenedores, enseña qué parte es recuperable y compara los
+                    mayores consumidores con barras. Son fotos del momento, no
+                    histórico: no guarda series de CPU ni de memoria, porque eso
+                    necesita acumular muestras en el servidor y aquí no se hace.
+                    <br />
+                    <br />
                     <strong className="text-fg">Seleccionar archivo</strong> abre un
                     explorador para no tener que copiar la ruta a mano, que es como se
                     acababa previsualizando el proyecto equivocado. Solo recorre tu

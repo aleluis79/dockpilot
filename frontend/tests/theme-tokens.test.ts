@@ -25,6 +25,22 @@ const BUILTIN_PALETTES = new Set([
 ])
 
 /** Prefijos de utilidad que consumen un token de color propio. */
+/**
+ * Colores escritos a mano en Atributos SVG (SPEC-16 §3.3).
+ *
+ * `COLOR_UTILITIES` solo mira clases de utilidad en el `className`, así que un
+ * `stroke="#3b82f6"` pasaba desapercibido. Y no era hipotético: los sparklines de
+ * CPU y memoria de `StatsModal` llevaban dos hexos fijos que no cambiaban con el
+ * tema, y un dashboard multiplicaría justo eso.
+ *
+ * Se admiten `var(--token)`, `currentColor` y `none`, que es lo que sí sigue al
+ * tema.
+ */
+const SVG_PAINT = /(?:^|[\s"'`])((?:stroke|fill|stop-color|color))=(["'])([^"']*)\2/g
+
+/** Colores que no son literales y por tanto no se pueden auditar aquí. */
+const PAINT_NO_LITERAL = new Set(['none', 'transparent', 'currentColor', 'inherit'])
+
 const COLOR_UTILITIES = /(?:^|[\s"'`])(?:[a-z-]+:)*(bg|text|border|ring|divide|placeholder|from|via|to|fill|stroke|accent|caret|outline|decoration)-([a-z][a-z0-9-]*)/g
 
 /** Palabras que aparecen tras el guion pero no son colores. */
@@ -107,6 +123,31 @@ describe('arquitectura de tokens de tema', () => {
    * (`hover:bg-elevated-hover` en 8 componentes y `bg-card` en 3 modales), así
    * que la comprobación es automática.
    */
+  it('no escribe colores a mano en los atributos de un SVG', () => {
+    const offenders: string[] = []
+
+    for (const file of files) {
+      const content = readFileSync(file, 'utf-8')
+      content.split('\n').forEach((line, index) => {
+        for (const match of line.matchAll(SVG_PAINT)) {
+          const valor = match[3].trim()
+          if (PAINT_NO_LITERAL.has(valor)) continue
+          // Un token del tema es lo esperado: `--color-chart-images` o
+          // `var(--dp-chart-images)`.
+          if (/^var\(--[a-z-]+\)$/.test(valor)) continue
+          const relative = file.replace(`${SRC_DIR}/`, '')
+          offenders.push(`  ${relative}:${index + 1} -> ${match[0].trim()}`)
+        }
+      })
+    }
+
+    expect(
+      offenders,
+      `Estos colores están escritos a mano en un SVG, así que no siguen al tema: ` +
+        `usa var(--color-*) o currentColor (SPEC-16 §3.3).\n${offenders.join('\n')}`
+    ).toEqual([])
+  })
+
   it('no usa tokens de color que no estén declarados en index.css', () => {
     const css = readFileSync(CSS_PATH, 'utf-8')
     const declared = new Set(

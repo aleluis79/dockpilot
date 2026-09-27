@@ -94,6 +94,15 @@ describe('HelpModal', () => {
     ).toBeInTheDocument()
   })
 
+  it('explica que el detalle del host es una foto, no un histórico', () => {
+    render(<HelpModal open onClose={vi.fn()} />)
+    irA(/pestañas/i)
+
+    // Sin esto, alguien esperará curvas de CPU y de memoria y le sorprenderá que no
+    // aparezcan: no hay histórico porque el backend no guarda muestras.
+    expect(contenido().getByText(/fotos del momento/i)).toBeInTheDocument()
+  })
+
   it('documenta que se puede elegir el archivo sin copiar la ruta', () => {
     render(<HelpModal open onClose={vi.fn()} />)
     irA(/pestañas/i)

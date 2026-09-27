@@ -224,7 +224,7 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
                   percent={currentStats.cpu_percent}
                   history={history}
                   metric="cpu_percent"
-                  color="#3b82f6"
+                  color="var(--color-chart-images)"
                   footer={`${history.length} muestras · ${currentStats.pids_current ?? 0} procesos`}
                 />
                 <MetricCard
@@ -234,7 +234,7 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, container, onClo
                   percent={currentStats.memory_percent}
                   history={history}
                   metric="memory_percent"
-                  color="#a855f7"
+                  color="var(--color-chart-containers)"
                   footer={`${formatBytes(currentStats.memory_usage)} / ${formatBytes(currentStats.memory_limit)}`}
                 />
               </div>

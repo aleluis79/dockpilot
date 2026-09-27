@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { Server, Cpu, MemoryStick, HardDrive, Layers, Package, Box, Database, ArrowRight } from 'lucide-react'
 import { formatBytes, formatPercent } from '../../utils/format'
-import type { ResourceUsage, TopConsumer, SystemOverview, CleanupTab } from '../../types/system'
+import { StackedBar } from './charts/StackedBar'
+import { ConsumerBars } from './charts/ConsumerBars'
+import type { ResourceUsage, SystemOverview, CleanupTab } from '../../types/system'
 
 /**
  * Porcentaje que el daemon considera recuperable sobre el total del recurso.
@@ -87,42 +89,6 @@ function UsageBlock({
   )
 }
 
-function ConsumerList({
-  title,
-  consumers,
-  emptyLabel,
-}: {
-  title: string
-  consumers: TopConsumer[]
-  emptyLabel: string
-}) {
-  return (
-    <div className="min-w-0">
-      <h4 className="text-xs font-semibold text-fg mb-1.5">{title}</h4>
-      {consumers.length === 0 ? (
-        <p className="text-[11px] text-fg-subtle">{emptyLabel}</p>
-      ) : (
-        <ul className="space-y-1">
-          {consumers.map((consumer) => (
-            <li
-              key={`${consumer.kind}-${consumer.name}`}
-              data-testid="top-consumer"
-              className="flex items-baseline justify-between gap-2 text-[11px]"
-            >
-              <span className="font-mono text-fg truncate" title={consumer.name}>
-                {consumer.name}
-              </span>
-              <span className="flex items-baseline gap-2 shrink-0">
-                <span className="text-fg-subtle">{consumer.detail}</span>
-                <span className="text-fg font-medium">{formatBytes(consumer.size)}</span>
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
 
 interface SystemDetailPanelProps {
   overview: SystemOverview
@@ -176,8 +142,79 @@ export function SystemDetailPanel({ overview, onNavigateTab }: SystemDetailPanel
         </dl>
       </div>
 
+      {/* El recuento en texto de la franja de resumen se convierte en algo que se
+          lee de un vistazo. Los datos vienen de `/info` dentro de `SystemInfo`, así
+          que esta sección no pide nada nuevo al daemon (SPEC-16 §1). */}
+      <div>
+        <h3 className="text-xs font-semibold text-fg mb-2">Estados de los contenedores</h3>
+        <div data-testid="chart-estados">
+          <StackedBar
+            titulo="Estados de los contenedores"
+            vacio="Sin contenedores en el host."
+            tramos={[
+              {
+                label: 'Corriendo',
+                value: info.containers_running,
+                color: 'var(--color-chart-running)',
+              },
+              {
+                label: 'Detenidos',
+                value: info.containers_stopped,
+                color: 'var(--color-chart-stopped)',
+              },
+              {
+                label: 'Pausados',
+                value: info.containers_paused,
+                color: 'var(--color-chart-paused)',
+              },
+            ]}
+          />
+        </div>
+      </div>
+
       <div>
         <h3 className="text-xs font-semibold text-fg mb-2">Uso de disco</h3>
+
+        {/* La barra reparte el espacio entre categorías. Las capas compartidas se
+            dejan fuera a propósito: sumarlas al total de imágenes contaría el
+            mismo espacio dos veces, y esa nota ya está debajo. */}
+        <div className="mb-2" data-testid="chart-disco">
+          <StackedBar
+            titulo="Espacio ocupado por categoría"
+            tramos={[
+              {
+                label: 'Imágenes',
+                value: usage.images.total_size,
+                color: 'var(--color-chart-images)',
+                format: formatBytes,
+              },
+              {
+                label: 'Volúmenes',
+                value: usage.volumes.total_size,
+                color: 'var(--color-chart-volumes)',
+                format: formatBytes,
+              },
+              {
+                label: 'Caché de builds',
+                value: usage.build_cache_size,
+                color: 'var(--color-chart-cache)',
+                format: formatBytes,
+              },
+              {
+                label: 'Contenedores',
+                value: usage.containers.total_size,
+                color: 'var(--color-chart-containers)',
+                format: formatBytes,
+              },
+            ]}
+          />
+          <p className="text-[11px] text-fg-subtle mt-1.5">
+            Recuperable: {formatBytes(usage.images.reclaimable)} de imágenes ·{' '}
+            {formatBytes(usage.volumes.reclaimable)} de volúmenes ·{' '}
+            {formatBytes(usage.containers.reclaimable)} de contenedores
+          </p>
+        </div>
+
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2" data-testid="usage-blocks">
           <UsageBlock
             icon={Package}
@@ -223,16 +260,20 @@ export function SystemDetailPanel({ overview, onNavigateTab }: SystemDetailPanel
           </p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <ConsumerList
-              title="Imágenes"
-              consumers={overview.top_images}
-              emptyLabel="Sin datos de consumo por recurso."
-            />
-            <ConsumerList
-              title="Volúmenes"
-              consumers={overview.top_volumes}
-              emptyLabel="Sin datos de consumo por recurso."
-            />
+            <div data-testid="chart-top-images">
+              <div className="text-[11px] font-semibold text-fg-muted mb-1.5">Imágenes</div>
+              <ConsumerBars
+                titulo="Mayores imágenes"
+                consumidores={overview.top_images}
+              />
+            </div>
+            <div data-testid="chart-top-volumes">
+              <div className="text-[11px] font-semibold text-fg-muted mb-1.5">Volúmenes</div>
+              <ConsumerBars
+                titulo="Mayores volúmenes"
+                consumidores={overview.top_volumes}
+              />
+            </div>
           </div>
         )}
       </div>

@@ -35,7 +35,8 @@ const overview: SystemOverview = {
   top_volumes: [{ kind: 'volume', name: 'datos-app', size: 104857600, detail: 'Sin usar' }],
 }
 
-describe('SystemDetailPanel', () => {  beforeEach(() => vi.restoreAllMocks())
+describe('SystemDetailPanel', () => {
+  beforeEach(() => vi.restoreAllMocks())
 
   it('desglosa el uso por tipo de recurso', () => {
     render(<SystemDetailPanel overview={overview} />)
@@ -60,8 +61,11 @@ describe('SystemDetailPanel', () => {  beforeEach(() => vi.restoreAllMocks())
     render(<SystemDetailPanel overview={overview} />)
 
     expect(screen.getByText('tmp/builder-leftover:latest')).toBeInTheDocument()
-    const elementos = screen.getAllByTestId('top-consumer')
+    // `ConsumerBars` normaliza contra el mayor y ordena de mayor a menor, así que
+    // el primero tiene la barra llena.
+    const elementos = screen.getAllByTestId(/^consumer-fila-/)
     expect(elementos[0]).toHaveTextContent('tmp/builder-leftover:latest')
+    expect(elementos[0].querySelector('[data-testid^="consumer-barra-"]')).toHaveStyle({ width: '100%' })
     expect(elementos[1]).toHaveTextContent('postgres:16-alpine')
   })
 
@@ -143,4 +147,132 @@ describe('SystemDetailPanel', () => {  beforeEach(() => vi.restoreAllMocks())
     expect(imagenes.getByText(/1\.0 GB recuperables/)).toBeInTheDocument()
     expect(imagenes.queryByRole('button')).not.toBeInTheDocument()
   })
+
+/**
+ * Host con cifras distintas del de arriba a propósito: 5 contenedores y 6 GB de
+ * imágenes permiten comprobar proportions que el otro fixture no cubre.
+ */
+const resumen: SystemOverview = {
+  info: {
+    server_version: '29.8.1',
+    os_name: 'Debian',
+    os_type: 'linux',
+    architecture: 'x86_64',
+    kernel_version: '6.12.0',
+    hostname: 'host',
+    ncpu: 12,
+    memory_total: 32_827_215_872,
+    storage_driver: 'overlayfs',
+    docker_root_dir: '/var/lib/docker',
+    containers_total: 5,
+    containers_running: 3,
+    containers_stopped: 1,
+    containers_paused: 1,
+    images_total: 8,
+  },
+  usage: {
+    layers_size: 4_000_000_000,
+    build_cache_size: 1_000_000_000,
+    images: { total_count: 8, active_count: 3, total_size: 6_000_000_000, reclaimable: 2_000_000_000 },
+    containers: { total_count: 5, active_count: 3, total_size: 500_000_000, reclaimable: 0 },
+    volumes: { total_count: 4, active_count: 2, total_size: 300_000_000, reclaimable: 300_000_000 },
+  },
+  top_images: [
+    { kind: 'image', name: 'elasticsearch:9.1.3', size: 3_000_000_000, detail: '1.1 GB' },
+    { kind: 'image', name: 'alpine:3.20', size: 500_000, detail: '8.0 MB' },
+  ],
+  top_volumes: [
+    { kind: 'volume', name: 'elasticsearch_data', size: 1_200_000_000, detail: '' },
+    { kind: 'volume', name: 'cache', size: 100_000, detail: '' },
+  ],
+}
+
+describe('SystemDetailPanel · resumen visual', () => {
+  it('muestra los estados de los contenedores en una barra', () => {
+    render(<SystemDetailPanel overview={resumen} />)
+
+    const grafica = screen.getByRole('img', { name: /estados de los contenedores/i })
+    // El desglose viene de `/info` y no pide nada nuevo al backend.
+    expect(grafica.getAttribute('aria-label')).toContain('3')
+    expect(grafica.getAttribute('aria-label')).toContain('1')
+  })
+
+  it('los tramos de estado suman el total de contenedores', () => {
+    render(<SystemDetailPanel overview={resumen} />)
+
+    const seccion = screen.getByTestId('chart-estados')
+    const corriendo = within(seccion).getByTestId('stacked-tramo-Corriendo')
+    // 3 corriendo de 5 en total.
+    expect(corriendo).toHaveStyle({ width: '60%' })
+  })
+
+  it('reparte el disco por categoría', () => {
+    render(<SystemDetailPanel overview={resumen} />)
+
+    const seccion = screen.getByTestId('chart-disco')
+    // 6 GB de imágenes contra 11,8 GB de total: la mayor categoría, y por el
+    // orden de mayor a menor tiene que ir la primera.
+    const primero = within(seccion).getAllByTestId(/^stacked-leyenda-/)[0]
+    expect(primero).toHaveTextContent('Imágenes')
+  })
+
+  it('distingue lo ocupado de lo recuperable', () => {
+    render(<SystemDetailPanel overview={resumen} />)
+
+    // Es la cifra accionable de la spec: las imágenes tienen casi 2 GB liberables.
+    // `formatBytes` usa unidades binarias, así que 2.000.000.000 son 1,9 GB.
+    expect(screen.getByTestId('chart-disco')).toHaveTextContent(/1\.9 GB/)
+    expect(screen.getByTestId('chart-disco')).toHaveTextContent(/recuperable/i)
+  })
+
+  it('los mayores consumidores salen como barras', () => {
+    render(<SystemDetailPanel overview={resumen} />)
+
+    const imagenes = screen.getByTestId('chart-top-images')
+    const barras = within(imagenes).getAllByTestId(/^consumer-barra-/)
+    expect(barras.length).toBe(2)
+    // La mayor ocupa el ancho completo.
+    expect(barras[0]).toHaveStyle({ width: '100%' })
+  })
+
+  it('sin contenedores en el host lo dice en vez de dibujar una barra vacía', () => {
+    render(
+      <SystemDetailPanel
+        overview={{
+          ...resumen,
+          info: {
+            ...resumen.info,
+            containers_total: 0,
+            containers_running: 0,
+            containers_stopped: 0,
+            containers_paused: 0,
+          },
+        }}
+      />
+    )
+
+    // El mensaje dice qué falta, que es más útil que un "sin datos" genérico.
+    expect(
+      within(screen.getByTestId('chart-estados')).getByText(/sin contenedores/i)
+    ).toBeInTheDocument()
+    expect(within(screen.getByTestId('chart-estados')).queryByTestId('stacked-barra')).toBeNull()
+  })
+
+  it('mantiene el enlace a la vista de la que se puede limpiar', () => {
+    const onNavigateTab = vi.fn()
+    render(<SystemDetailPanel overview={resumen} onNavigateTab={onNavigateTab} />)
+
+    // Las gráficas no ejecutan nada: siguen llevando a la vista que ya lo hace.
+    const enlace = screen.getAllByRole('button', { name: /ir a la vista de imágenes/i })[0]
+    expect(enlace).toBeInTheDocument()
+  })
+
+  it('no pinta colores literales en las gráficas', () => {
+    const { container } = render(<SystemDetailPanel overview={resumen} />)
+
+    // Si un color se escribiera a mano, no seguiría al tema. El guard de tokens
+    // lo caza en el código, y esto lo confirma en el DOM renderizado.
+    expect(container.innerHTML).not.toMatch(/#[0-9a-f]{3,6}/i)
+  })
+})
 })

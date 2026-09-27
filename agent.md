@@ -123,6 +123,13 @@ No se movió el hook a una vista propia a propósito: `App` tiene siete estados 
 
 Y hay una regla fácil de romper en el mismo hook: **el filtro de estado se aplica en el navegador, no en el servidor**. El backend lo admite (`GET /containers?status=...`), pero pedir solo los de un estado hacía que los contadores de las pills bailaran —se calculan sobre la lista completa, así que al elegir «Activos» el contador de «Todos» marcaba el número de activos y los otros dos caían a cero— y convertía cada clic en un filtro en una ida y vuelta al daemon. Los contadores son un censo del host, no un recuento de lo que se está viendo.
 
+#### La paleta de gráfico y el agujero del guard (SPEC-16)
+`index.css` tiene diez tokens **neutros** y ocho **semánticos** de gráfico (`--color-chart-running`, `--color-chart-images`, …), con su par claro y oscuro. Sin ellos una barra por categorías sale gris sobre gris.
+
+**El guard de tokens también escanea atributos de SVG.** Antes solo buscaba clases de utilidad en el `className`, así que un `stroke="#3b82f6"` pasaba desapercibido — y no era hipotético: los sparklines de CPU y memoria de `StatsModal` llevaban dos hexos fijos que **no cambiaban con el tema**. Un `div` con `width` porcentual o un `<path stroke>` llevan el color como **atributo de estilo**, no como clase, y por eso hacen falta las dos comprobaciones.
+
+Las gráficas del sistema son census: instantáneas, sin histórico. **No hay series temporales** porque el backend es sin estado y no tiene buffer; y `cpu_percent` va multiplicado por `online_cpus`, así que 100% es *un* núcleo y sin dividir por `NCPU` una gráfica de host daría 1200 %.
+
 ### Backend
 - **Framework**: FastAPI (Python 3.12+).
 - **Servidor ASGI**: Uvicorn con soporte `uvloop`.
@@ -155,7 +162,8 @@ dockpilot/
 │   ├── 12-compose-plan.md       # Spec: Lectura y previsualización de archivos compose (1er subprocess)
 │   ├── 13-compose-lifecycle.md  # Spec: Ciclo de vida de proyectos compose (up/stop/down/pull/logs)
 │   ├── 14-compose-file-browser.md # Spec: Explorador de archivos compose (elegir ruta sin copiarla)
-│   └── 15-compose-deploy-from-plan.md # Spec: Desplegar un compose file desde el plan (up, coste de build)
+│   ├── 15-compose-deploy-from-plan.md # Spec: Desplegar un compose file desde el plan (up, coste de build)
+│   └── 16-host-census-dashboard.md # Spec: Dashboard de censo del host (barras, paleta de gráfico)
 ├── backend/
 │   ├── app/
 │   │   ├── api/
@@ -223,6 +231,7 @@ dockpilot/
 │   │   │   ├── volumes/           # VolumesView, VolumesTable, VolumeDetailModal
 │   │   │   ├── networks/          # NetworksView, NetworksTable, CreateNetworkModal, NetworkDetailModal
 │   │   │   ├── system/            # SystemSummaryBar, SystemDetailPanel
+│   │   │   │   └── charts/      # StackedBar, ConsumerBars (SPEC-16)
 │   │   │   ├── compose/           # ProjectsView, ProjectsTable, ProjectDetailModal, ComposeBadge,
 │   │   │   │                     # ComposePlanModal, ComposeEditor, ComposeActionPanel,
 │   │   │   │                     # ComposeDownDialog, ComposeLogsViewer, ComposeFilePicker,
