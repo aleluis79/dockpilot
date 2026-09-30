@@ -8,6 +8,11 @@ interface NavbarProps {
   loading: boolean
   onOpenCreateModal?: () => void
   onOpenHelp?: () => void
+  /**
+   * Error de la última petición al backend, si lo hubo. El indicador de estado
+   * lo usa para dejar de decir «Conectado» cuando el daemon no responde.
+   */
+  error?: string | null
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -15,7 +20,13 @@ export const Navbar: React.FC<NavbarProps> = ({
   loading,
   onOpenCreateModal,
   onOpenHelp,
+  error,
 }) => {
+  // Sin esto el indicador era decorativo: ponía «Conectado» siempre, y con el
+  // backend parado cada vista enseñaba su propio error mientras la barra
+  // afirmaba lo contrario.
+  const conectado = !error
+
   return (
     <header className="border-b border-default bg-inset/80 backdrop-blur sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -45,10 +56,25 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           )}
 
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-elevated border border-default text-xs text-fg-muted">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+          <div
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-elevated border border-default text-xs text-fg-muted"
+            title={error ?? 'El backend responde y el daemon está accesible'}
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                conectado ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'
+              }`}
+            />
             <span className="font-mono">/var/run/docker.sock</span>
-            <span className="text-emerald-700 dark:text-emerald-400 font-medium">Conectado</span>
+            <span
+              className={
+                conectado
+                  ? 'text-emerald-700 dark:text-emerald-400 font-medium'
+                  : 'text-rose-700 dark:text-rose-400 font-medium'
+              }
+            >
+              {conectado ? 'Conectado' : 'Sin conexión'}
+            </span>
           </div>
 
           <ThemeToggle />

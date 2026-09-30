@@ -8,6 +8,7 @@ import aiodocker
 from aiodocker.exceptions import DockerError
 from fastapi import HTTPException
 
+from app.core.docker import docker_error_message, docker_error_status
 from app.schemas.stats import ContainerStats
 
 
@@ -189,7 +190,9 @@ class StatsService:
             # 409: el daemon rechaza la consulta de stats porque el contenedor no está en ejecución
             if e.status == 409:
                 return empty_stats(cid, name)
-            raise HTTPException(status_code=e.status, detail=e.message) from e
+            raise HTTPException(
+                status_code=docker_error_status(e), detail=docker_error_message(e)
+            ) from e
         except HTTPException:
             raise
         except Exception as e:

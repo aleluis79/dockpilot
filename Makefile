@@ -72,7 +72,7 @@ backend-test:               ## Ejecuta la suite de pruebas (pytest)
 	cd backend && PYTHONPATH=. .venv/bin/pytest -v
 
 backend-lint:               ## Verifica el código con Ruff (config en backend/pyproject.toml)
-	cd backend && .venv/bin/python -m ruff check app
+	cd backend && .venv/bin/python -m ruff check app tests
 
 backend: backend-install backend-serve  ## Prepara y levanta el backend
 

@@ -21,6 +21,28 @@ def docker_error_message(exc: object) -> str:
     return str(raw) if raw else str(exc)
 
 
+def docker_error_status(exc: object) -> int:
+    """Traduce el `status` de un `DockerError` a un código HTTP servible.
+
+    aiodocker usa el 900 como "no pude hablar con el daemon"
+    (`DockerError(900, "Cannot connect to Docker Engine...")`). Ese 900 no es un
+    código HTTP: pasarlo tal cual a `HTTPException` hace que uvicorn	indexe
+    `STATUS_LINE[900]` y reviente con `KeyError`, dejando al cliente sin
+    respuesta (`curl: (52) Empty reply from server`).
+
+    Tampoco valen los códigos de la serie 1xx/2xx/3xx, porque un
+    `HTTPException` con cualquiera de ellos no puede llevar cuerpo de error.
+    Todo lo que no encaje se traduce a 503, que es lo que significa de verdad:
+    el daemon no está disponible.
+    """
+    status = getattr(exc, "status", 0)
+    if isinstance(status, bool) or not isinstance(status, int):
+        return 503
+    if 400 <= status < 600:
+        return status
+    return 503
+
+
 async def init_docker() -> aiodocker.Docker:
     global _docker_client
     if _docker_client is None:

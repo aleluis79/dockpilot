@@ -189,8 +189,21 @@ def _build_usage(raw: dict[str, Any]) -> DiskUsage:
         images=_resource_usage(raw.get("ImageUsage")),
         containers=_resource_usage(raw.get("ContainerUsage")),
         volumes=_resource_usage(raw.get("VolumeUsage")),
-        build_cache_size=_as_int(raw.get("BuildCacheUsage")),
+        build_cache_size=_build_cache_total_size(raw.get("BuildCacheUsage")),
     )
+
+
+def _build_cache_total_size(block: Any) -> int:
+    """Tamaño total de la caché de build.
+
+    `BuildCacheUsage` es un bloque como los demás (`TotalCount`, `TotalSize`,
+    `Reclaimable`, `Items`), no un entero: hay que leer `TotalSize` dentro. Pasarlo
+    tal cual a `_as_int` devolvía 0 siempre, que es el valor de un host sin
+    caché de build y también el de un host al que no se le puede preguntar.
+    """
+    if not isinstance(block, dict):
+        return 0
+    return _as_int(block.get("TotalSize"))
 
 
 def _resource_usage(block: Any) -> ResourceUsage:

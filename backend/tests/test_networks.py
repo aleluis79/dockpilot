@@ -249,3 +249,76 @@ async def test_prune_networks_sin_huerfanas_devuelve_lista_vacia(
     response = await async_client.post("/api/v1/networks/prune")
     assert response.status_code == 200
     assert response.json()["deleted"] == []
+
+
+# --- El nombre no puede cambiar de endpoint -----------------------------------
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "nombre",
+    [
+        "..",
+        "../volumes/mydata",
+        "../../images",
+        "red?force=true",
+        "red#fragmento",
+        "red/bar",
+        "red con espacios",
+        "red\\con\\barras",
+        "red'comilla",
+        "red;comando",
+        "",
+    ],
+)
+async def test_borrar_rechaza_nombres_que_rompen_la_url(mock_docker, nombre):
+    """Con `force` el nombre se interpola en la URL cruda, así que va validado.
+
+    aiodocker no hace percent-encoding (`_canonicalize_url` es un f-string), así
+    que `../volumes/mydata` construía
+    `DELETE /v1.43/networks/../../volumes/mydata?force=true`: otro endpoint del
+    daemon, con otro verbo. `create_network` ya validaba el nombre; esta ruta no.
+
+    Se llama al servicio y no por HTTP porque `..`, `?` y `#` los consume el
+    parser de URL antes de llegar al parámetro de la ruta: por la API ni se llega
+    al 404 sin tocar el daemon, que también es seguro pero no prueba nada.
+    """
+    from fastapi import HTTPException
+
+    from app.services.network_service import NetworkService
+
+    with pytest.raises(HTTPException) as exc:
+        await NetworkService.delete_network(mock_docker, nombre, force=True)
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_borrar_una_red_normal_sigue_funcionando(async_client: AsyncClient, mock_docker):
+    """La validación no puede romper el camino feliz."""
+    response = await async_client.delete("/api/v1/networks/red-de-prueba?force=true")
+    assert response.status_code == 200
+    assert response.json()["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_el_nombre_se_valida_antes_de_tocar_el_daemon(mock_docker):
+    """La propiedad de seguridad real: un nombre inválido no llega al daemon."""
+    from fastapi import HTTPException
+
+    from app.services.network_service import NetworkService
+
+    vistas: list[str] = []
+
+    async def _query_json(endpoint: str, method: str = "GET", params: dict | None = None):
+        vistas.append(endpoint)
+        return {}
+
+    mock_docker._query_json = _query_json
+
+    with pytest.raises(HTTPException):
+        await NetworkService.delete_network(mock_docker, "../volumes/mydata", force=True)
+    assert vistas == [], "el daemon llegó a recibir un nombre con path traversal"
+
+    # Y un nombre válido sí pasa, con la URL construida a partir de ese nombre.
+    await NetworkService.delete_network(mock_docker, "red-de-prueba", force=True)
+    assert vistas == ["networks/red-de-prueba"]

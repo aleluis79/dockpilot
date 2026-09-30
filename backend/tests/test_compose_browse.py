@@ -11,7 +11,6 @@ explorador de tu disco entero, y las dos se comprueban con ficheros de verdad.
 """
 
 import os
-from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient

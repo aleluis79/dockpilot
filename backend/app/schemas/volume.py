@@ -12,6 +12,13 @@ class VolumeSummary(BaseModel):
     created_at: str = Field("", description="Fecha de creación en ISO 8601")
     size: int = Field(0, description="Tamaño en bytes; 0 si el daemon no lo informa")
     ref_count: int = Field(0, description="Contenedores que usan el volumen; 0 = eliminable")
+    usage_known: bool = Field(
+        True,
+        description=(
+            "False si el daemon no pudo informar del uso. Entonces `ref_count` "
+            "vale 0 por defecto y NO significa que el volumen esté libre"
+        ),
+    )
     is_anonymous: bool = Field(
         False, description="True si el nombre es un hash de 64 hex"
     )

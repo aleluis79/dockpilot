@@ -12,7 +12,7 @@
   - No incluye (en esta spec):
     - **Abrir, previsualizar o editar el contenido de un fichero desde el explorador.** Solo se elige la ruta; leer el archivo sigue siendo cosa de SPEC-12.
     - **Buscar por nombre.** El explorador navega, no busca. `grep` en el terminal sigue siendo más rápido para eso.
-    - **Salir de la raíz.** Un `..` en el borde de la raíz no sube, y un enlace simbólico que apunte fuera no se puede abrir. No hay forma de leer directorios fuera del home sin cambiar la configuración del backend.
+    - **Salir de la raíz.** Un `..` en el borde de la raíz no sube, y un enlace simbólico que apunte fuera no se puede abrir. No hay forma de leer directorios fuera del home sin cambiar la configuración del backend. Esto no es solo del explorador: el plan y el ciclo de vida comparten el mismo confinamiento (§3.2), así que tampoco hay forma de *leer, escribir ni arrancar* un compose file fuera del home.
     - **Subir ficheros al host** ni escribirlos. Sigue siendo un panel de un solo operador que no toca el disco.
     - **Montar el proyecto desde el explorador.** Elegir el archivo rellena el campo y deja al usuario en el preview, que es donde vive la previsualización.
 
@@ -135,6 +135,30 @@ Añadir el separador tampoco es una solución: con `raiz='/'` produce `startswit
 
 **Los directorios cuyo `resolve()` sale de la raíz no se listan**, y su número se devuelve en `ocultos`. Un enlace simbólico a `~/.ssh` desaparece en vez de aparecer y fallar al entrar: más seguro y menos confuso que ofrecer algo que va a ser rechazado.
 
+#### La misma raíz gobierna las tres entradas, no sólo el explorador
+
+El explorador confina **lo que muestra**. Si el confinamiento se quedara aquí, sólo de lectura, seguiría habiendo escritura fuera de la raíz por las otras dos puertas, y el selector sería un adorno: seguirían desapareciendo de la pantalla archivos que el usuario sí puede desplegar.
+
+Las tres entradas que aceptan una ruta del cliente comparten la misma raíz:
+
+| Entrada | Spec | Qué haría sin confinamiento |
+| :--- | :--- | :--- |
+| `GET /api/v1/compose/browse` | SPEC-14 | Enumerar el disco fuera del home |
+| `POST /api/v1/compose/plan` | SPEC-12 | **Leer** un compose file fuera del home, y con `content`, **escribirlo** en su directorio |
+| `WS /ws/compose/{action}` | SPEC-13 y SPEC-15 | **Arrancar** un compose file fuera del home |
+
+El caso del plan es el que obliga a tomárselo en serio: `build_plan` no se limita a leer, escribe un temporal con el contenido que mandó el cliente **junto al archivo original**, porque es lo que hace que los `env_file` y los `build.context` relativos sigan resolviendo (SPEC-12 §3.6). Un `path=/etc/docker-compose.yml` con `content` escribía en `/etc`. Por eso el confinamiento va **antes** de `exists()`, de `is_file()` y del `stat()`: ni un solo `stat` fuera de la raíz.
+
+Las tres usan el mismo criterio por el mismo motivo que `parents` en vez de `startswith`: una regla escrita tres veces acaba siendo tres reglas. El helper es `resolver_ruta_explorador()`, y `_validar_ruta()` (SPEC-12) lo llama. Que el confinamiento viva en esta spec y no en SPEC-12 es deliberado: la raíz se define aquí, y las otras dos la consumen.
+
+Un detalle que se gana de paso: SPEC-12 devuelve la ruta **resuelta** en vez de la cadena original, así que el temporal cae junto al archivo real y no junto al enlace simbólico por el que se entró.
+
+#### `403` antes que `404`, y por qué no se distinguen
+
+Fuera de la raíz, la respuesta es `403` **antes** de comprobar si el archivo existe. `403` y `404` comparten mensaje a propósito: distinguirlos convertiría el endpoint en un mapa del disco, porque bastaría con leer los códigos para enumerar qué hay fuera.
+
+Un efecto secundario que hay que aceptar: una ruta **inexistente pero dentro de la raíz** sigue dando `404`, y una **fuera de la raíz** da `403` exista o no. Los tests de SPEC-12 y SPEC-13 usan `tmp_path` como raíz, también por esto y no por descuido.
+
 ### 3.3 Qué se devuelve, y qué no
 
 Solo **nombres, tipos y tamaños**. Nunca contenido, y por una razón concreta: el contenido lo sirve SPEC-12 con su validación de tamaño y su lógica de errores, y duplicarlo aquí abriría una segunda vía de lectura de ficheros que nadie ha pedido.
@@ -160,6 +184,16 @@ El corte es **por directorios primero**, porque son los que hacen falta para nav
 | `GET` | `/api/v1/compose/browse?path=<abs>` | `200 OK` (`BrowseResult`) | `400`, `403`, `404` |
 
 Es `GET` y no `POST`: no muta nada, y el `path` va en query como en el resto de endpoints de lectura. El caso más sencillo es la raíz, que es lo que se muestra al abrir el selector por primera vez.
+
+La fila de arriba es la única que expone esta spec, pero el `403` es **el mismo código y el mismo mensaje** en las otras dos entradas con ruta de cliente (§3.2), porque comparten `resolver_ruta_explorador()`:
+
+| Entrada | Errores de ruta | Spec propietaria |
+| :--- | :--- | :--- |
+| `GET /api/v1/compose/browse` | `400` relativa, `403` fuera de raíz, `404` no existe | SPEC-14 |
+| `POST /api/v1/compose/plan` | `400` relativa, **`403` fuera de raíz**, `404` no existe, `413` demasiado grande | SPEC-12 |
+| `WS /ws/compose/{action}` | `400` relativa, **`403` fuera de raíz**, `404` no existe, `404` acción no soportada | SPEC-13 |
+
+En el WebSocket el `403` llega como frame `error` con `code: 403`, no como cierre, porque el cliente necesita poder mostrar el motivo junto al resto de la salida de la acción.
 
 ### 3.6 Superficie de usuario
 
@@ -305,7 +339,7 @@ Característica: Explorador de archivos compose
   - [x] Crear `backend/tests/test_compose_browse.py` con los casos de la sección 5, usando `tmp_path` como raíz
   - [x] Ejecutar `pytest -v` y confirmar que falla por implementación ausente (fase roja)
 - [x] **Fase 3: Implementación Backend**
-  - [x] Implementar `_confinar()` en `app/services/compose_service.py`, resolviendo antes de comparar y usando `parents` en lugar de `startswith`
+  - [x] Implementar `_resolver_dentro()` en `app/services/compose_service.py`, resolviendo antes de comparar y usando `parents` en lugar de `startswith` (el nombre es `_resolver_dentro`, no `_confinar`: además de confinar devuelve la ruta ya resuelta, que es lo que necesitan SPEC-12 y SPEC-13)
   - [x] Implementar `browse()` con `os.scandir`, el orden compose primero, la omisión de enlaces fuera de raíz y el truncado
   - [x] Traducir `OSError` a `403` y el directorio inexistente a `404`
   - [x] Registrar `GET /compose/browse` en `app/api/v1/compose.py`
@@ -324,3 +358,11 @@ Característica: Explorador de archivos compose
   - [x] Ejecutar y aprobar la suite frontend (`pnpm run test`, `pnpm run lint`, `pnpm run build`)
   - [x] Comprobar con el navegador que los 4 compose files del host son alcanzables desde el selector
   - [x] Actualizar `agent.md` (árboles, `specs/14-compose-file-browser.md`) y marcar las tareas como completadas (`[x]`)
+- [x] **Fase 7: Extender el confinamiento a las otras dos entradas**
+  - [x] Añadir `resolver_ruta_explorador()` como única puerta al criterio, y que `_validar_ruta()` (SPEC-12) lo use en vez de repetirlo
+  - [x] Devolver desde `_validar_ruta()` la ruta **resuelta**, para que el temporal de SPEC-12 caiga junto al archivo real y no junto al enlace simbólico
+  - [x] Confinar `POST /api/v1/compose/plan` antes de `exists()`/`is_file()`/`stat()`
+  - [x] Confinar `WS /ws/compose/{action}` (SPEC-13 y SPEC-15) con el mismo código y mensaje, traduciéndolo a frame `error` con `code: 403`
+  - [x] Anclar `COMPOSE_BROWSE_ROOT` a `tmp_path` en el fixture `archivo` de `conftest.py`, compartido por SPEC-12 y SPEC-13
+  - [x] Tests: `test_una_ruta_fuera_de_la_raiz_da_403` y `test_el_contenido_editado_no_se_escribe_fuera_de_la_raiz` en `test_compose_plan.py`; `test_una_ruta_fuera_de_la_raiz_no_arranca_nada` en `test_compose_ws.py`
+  - [x] Actualizar las tablas de errores de SPEC-12 y SPEC-13, y `agent.md`

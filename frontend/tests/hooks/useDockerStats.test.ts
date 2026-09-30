@@ -195,4 +195,128 @@ describe('useDockerStats', () => {
 
     expect(socket.close).toHaveBeenCalled()
   })
+
+  // --- El bucle de reconexión ---------------------------------------------------
+
+  it('does NOT reconnect after a normal close (1000)', () => {
+    // El backend cierra con 1000 cuando el stream de métricas se acaba, o sea
+    // cuando el contenedor se para. Reconectar ahí convertía la vista en un
+    // bucle infinito de 0.5 Hz: `stats()` sobre un contenedor parado falla con
+    // 409, el backend lo trata como fin de stream, cierra con 1000 otra vez...
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useDockerStats('c123', { reconnectDelay: 1000 }))
+
+    latest().serverOpen()
+    latest().serverClose(1000)
+
+    expect(result.current.connected).toBe(false)
+    expect(result.current.error).toBe('El contenedor dejó de enviar métricas')
+
+    act(() => {
+      vi.advanceTimersByTime(60000)
+    })
+    expect(MockWebSocket.instances).toHaveLength(1)
+  })
+
+  it('backs off exponentially instead of hammering the daemon', () => {
+    vi.useFakeTimers()
+    renderHook(() => useDockerStats('c123', { reconnectDelay: 1000, maxReconnectAttempts: 10 }))
+
+    // 1er fallo: espera 1s
+    latest().serverClose(1006)
+    act(() => {
+      vi.advanceTimersByTime(999)
+    })
+    expect(MockWebSocket.instances).toHaveLength(1)
+    act(() => {
+      vi.advanceTimersByTime(1)
+    })
+    expect(MockWebSocket.instances).toHaveLength(2)
+
+    // 2º fallo: espera 2s
+    latest().serverClose(1006)
+    act(() => {
+      vi.advanceTimersByTime(1999)
+    })
+    expect(MockWebSocket.instances).toHaveLength(2)
+    act(() => {
+      vi.advanceTimersByTime(1)
+    })
+    expect(MockWebSocket.instances).toHaveLength(3)
+
+    // 3er fallo: espera 4s
+    latest().serverClose(1006)
+    act(() => {
+      vi.advanceTimersByTime(3999)
+    })
+    expect(MockWebSocket.instances).toHaveLength(3)
+    act(() => {
+      vi.advanceTimersByTime(1)
+    })
+    expect(MockWebSocket.instances).toHaveLength(4)
+  })
+
+  it('gives up after maxReconnectAttempts and says so', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() =>
+      useDockerStats('c123', { reconnectDelay: 1000, maxReconnectAttempts: 3 })
+    )
+
+    for (let i = 0; i < 3; i++) {
+      latest().serverClose(1006)
+      act(() => {
+        vi.advanceTimersByTime(60000)
+      })
+    }
+    expect(MockWebSocket.instances).toHaveLength(4)
+
+    // El cuarto fallo ya no reintenta: se acabó.
+    latest().serverClose(1006)
+    act(() => {
+      vi.advanceTimersByTime(600000)
+    })
+
+    expect(MockWebSocket.instances).toHaveLength(4)
+    expect(result.current.error).toContain('3 reintentos')
+  })
+
+  it('resets the backoff after a successful connection', () => {
+    vi.useFakeTimers()
+    renderHook(() => useDockerStats('c123', { reconnectDelay: 1000, maxReconnectAttempts: 3 }))
+
+    // Dos fallos, y luego una conexión buena: el contador vuelve a cero.
+    latest().serverClose(1006)
+    act(() => {
+      vi.advanceTimersByTime(60000)
+    })
+    latest().serverClose(1006)
+    act(() => {
+      vi.advanceTimersByTime(60000)
+    })
+    latest().serverOpen()
+
+    latest().serverClose(1006)
+    act(() => {
+      vi.advanceTimersByTime(1000)
+    })
+
+    // Si no se hubiera reseteado, la tercera espera sería de 4s.
+    expect(MockWebSocket.instances).toHaveLength(4)
+  })
+
+  it('does not resurrect a 1000 stop after a later failure', () => {
+    // Una vez que el backend dice "se acabó" con 1000, un 1006 posterior no
+    // debe devolver el socket a la vida.
+    vi.useFakeTimers()
+    renderHook(() => useDockerStats('c123', { reconnectDelay: 1000 }))
+
+    latest().serverOpen()
+    latest().serverClose(1000)
+    latest().serverClose(1006)
+
+    act(() => {
+      vi.advanceTimersByTime(600000)
+    })
+    expect(MockWebSocket.instances).toHaveLength(1)
+  })
 })

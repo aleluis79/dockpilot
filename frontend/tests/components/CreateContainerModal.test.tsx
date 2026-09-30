@@ -148,3 +148,79 @@ describe('CreateContainerModal', () => {
     expect(resultItem).toBeInTheDocument()
   })
 })
+
+// --- El modal está siempre montado: su estado no debe sobrevivir a un cierre ----
+
+describe('CreateContainerModal: estado entre aperturas', () => {
+  const imagen = () =>
+    screen.getByPlaceholderText('ej. nginx:alpine o redis:latest') as HTMLInputElement
+  const nombre = () =>
+    screen.getByPlaceholderText('ej. mi-contenedor (opcional)') as HTMLInputElement
+
+  it('no arrastra la imagen ni los puertos del intento anterior', () => {
+    // El modal lo tienen montado siempre y sólo hace `return null` al cerrarse,
+    // así que su estado sobrevivía a cada apertura: abrirlo tras un intento
+    //hedido reenviaba lo escrito antes con el botón ya habilitado.
+    const { rerender } = render(
+      <CreateContainerModal isOpen={true} onClose={vi.fn()} onSuccess={vi.fn()} />
+    )
+
+    fireEvent.change(imagen(), { target: { value: 'nginx:alpine' } })
+    fireEvent.change(nombre(), { target: { value: 'mi-contenedor' } })
+    fireEvent.click(screen.getByText('Añadir puerto'))
+    expect(imagen().value).toBe('nginx:alpine')
+    expect(nombre().value).toBe('mi-contenedor')
+
+    rerender(<CreateContainerModal isOpen={false} onClose={vi.fn()} onSuccess={vi.fn()} />)
+    rerender(<CreateContainerModal isOpen={true} onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+    expect(imagen().value).toBe('')
+    expect(nombre().value).toBe('')
+  })
+
+  it('un intento fallido tampoco se arrastra', () => {
+    const { rerender } = render(
+      <CreateContainerModal isOpen={true} onClose={vi.fn()} onSuccess={vi.fn()} />
+    )
+
+    fireEvent.change(imagen(), { target: { value: 'nginx:alpine' } })
+
+    rerender(<CreateContainerModal isOpen={false} onClose={vi.fn()} onSuccess={vi.fn()} />)
+    rerender(<CreateContainerModal isOpen={true} onClose={vi.fn()} onSuccess={vi.fn()} />)
+
+    expect(imagen().value).toBe('')
+  })
+
+  it('la imagen preestablecida por el padre sí se respeta', () => {
+    // El reset no puede pisar la preselección: viene de pulsar «Crear desde
+    // esta imagen» en la tabla.
+    const { rerender } = render(
+      <CreateContainerModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        initialImage="redis:7-alpine"
+      />
+    )
+    expect(imagen().value).toBe('redis:7-alpine')
+
+    rerender(
+      <CreateContainerModal
+        isOpen={false}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        initialImage="redis:7-alpine"
+      />
+    )
+    rerender(
+      <CreateContainerModal
+        isOpen={true}
+        onClose={vi.fn()}
+        onSuccess={vi.fn()}
+        initialImage="postgres:16-alpine"
+      />
+    )
+
+    expect(imagen().value).toBe('postgres:16-alpine')
+  })
+})

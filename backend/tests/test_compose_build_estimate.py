@@ -9,7 +9,6 @@ Ninguno construye nada: se mide el directorio y nada más.
 """
 
 import os
-from pathlib import Path
 
 import pytest
 

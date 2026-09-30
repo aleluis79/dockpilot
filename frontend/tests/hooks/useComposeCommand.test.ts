@@ -362,3 +362,56 @@ describe('useComposeCommand', () => {
     expect(ws.cerrado).toBe(true)
   })
 })
+
+// --- El historial de salida no crece sin techo --------------------------------
+
+describe('useComposeCommand con tope de fragmentos', () => {
+  it('conserva como mucho los últimos maxChunks', () => {
+    const WS = instalar()
+    const { result } = renderHook(() => useComposeCommand({ maxChunks: 5 }))
+
+    act(() => {
+      result.current.ejecutar({ action: 'logs', path: '/p/dc.yml' })
+    })
+    const ws = WS.abiertos[0]
+
+    act(() => {
+      ws.emitir(START)
+      for (let i = 0; i < 40; i++) {
+        ws.emitir({ type: 'output', stream: 'stdout', data: `linea ${i}\n` })
+      }
+    })
+
+    // Un `logs --follow` abierto toda la sesión no puede acumular sin límite: el
+    // visor re-deriva todas las líneas en cada fragmento, así que el coste
+    // crecía con el cuadrado del historial además de la memoria.
+    expect(result.current.output).toHaveLength(5)
+    expect(result.current.output.map((l) => l.data)).toEqual([
+      'linea 35\n',
+      'linea 36\n',
+      'linea 37\n',
+      'linea 38\n',
+      'linea 39\n',
+    ])
+  })
+
+  it('respeta el tope por defecto sin configurarlo', () => {
+    const WS = instalar()
+    const { result } = renderHook(() => useComposeCommand())
+
+    act(() => {
+      result.current.ejecutar({ action: 'logs', path: '/p/dc.yml' })
+    })
+    const ws = WS.abiertos[0]
+
+    act(() => {
+      ws.emitir(START)
+      for (let i = 0; i < 5001; i++) {
+        ws.emitir({ type: 'output', stream: 'stdout', data: `x${i}\n` })
+      }
+    })
+
+    expect(result.current.output).toHaveLength(5000)
+    expect(result.current.output[4999].data).toBe('x5000\n')
+  })
+})

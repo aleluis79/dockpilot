@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Search, Star, ShieldCheck, Box, HardDrive, Sparkles, Loader2 } from 'lucide-react'
 import { dockerApi } from '../../services/dockerApi'
 import type { ImageSearchResult, LocalImageSummary } from '../../types/image'
+import { formatBytes } from '../../utils/format'
 
 interface ImageSelectorProps {
   selectedImage: string
@@ -39,6 +40,10 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
     if (tab !== 'local' || localImages.length > 0) return
 
     let isMounted = true
+    // Sin este `true` el estado nunca se ponía a True, así que la rama de
+    // "cargando" de más abajo era código muerto y, mientras la petición volaba,
+    // la vista afirmaba «no hay imágenes locales descargadas».
+    setLoadingLocal(true)
     dockerApi
       .getLocalImages()
       .then((data) => {
@@ -56,28 +61,29 @@ export const ImageSelector: React.FC<ImageSelectorProps> = ({
     }
   }, [tab, localImages.length])
 
+  // Sólo se acepta la respuesta de la petición vigente: dos búsquedas seguidas de
+  // prueba pueden volver desordenadas, y la más vieja se quedaba en pantalla.
+  const peticionBusquedaRef = useRef<number>(0)
+
   const handleSearch = async (e?: React.FormEvent) => {
     if (e) e.preventDefault()
     if (!searchTerm.trim()) return
 
+    const token = ++peticionBusquedaRef.current
     try {
       setSearching(true)
       setSearchError(null)
       const results = await dockerApi.searchImages(searchTerm.trim(), 10)
+      if (token !== peticionBusquedaRef.current) return
       setSearchResults(results)
     } catch (err: unknown) {
+      if (token !== peticionBusquedaRef.current) return
       setSearchError(err instanceof Error ? err.message : 'Error al buscar imágenes')
     } finally {
-      setSearching(false)
+      if (token === peticionBusquedaRef.current) setSearching(false)
     }
   }
 
-  const formatBytes = (bytes: number) => {
-    if (!bytes) return '0 B'
-    const mb = bytes / (1024 * 1024)
-    if (mb > 1024) return `${(mb / 1024).toFixed(1)} GB`
-    return `${mb.toFixed(1)} MB`
-  }
 
   return (
     <div className="space-y-3">

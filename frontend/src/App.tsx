@@ -65,6 +65,7 @@ function App() {
         loading={loading}
         onOpenCreateModal={() => setIsCreateModalOpen(true)}
         onOpenHelp={() => setIsHelpOpen(true)}
+        error={error}
       />
 
       {/* La franja comparte la columna del contenido: si se deja fuera de

@@ -5,7 +5,7 @@ import aiodocker
 from aiodocker.exceptions import DockerError
 from fastapi import HTTPException
 
-from app.core.docker import docker_error_message
+from app.core.docker import docker_error_message, docker_error_status
 from app.schemas.volume import (
     VolumeDeleteResponse,
     VolumeDetail,
@@ -44,17 +44,21 @@ def _clean_options(raw: Any) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
-async def _usage_index(docker: aiodocker.Docker) -> dict[str, dict]:
+async def _usage_index(docker: aiodocker.Docker) -> dict[str, dict] | None:
     """Índice nombre -> UsageData extraído de /system/df.
 
     El tamaño y el número de referencias de un volumen **no** vienen en
     `/volumes`, sino en `/system/df` y anidados bajo `UsageData` (SPEC-08 §3.1).
+
+    Devuelve `None` cuando esa lectura falla, que es distinto de `{}`: vacío
+    quiere decir "el daemon dice que ninguno está en uso", y `None` quiere decir
+    "no se ha podido preguntar". Confundir los dos convertía cada volumen en
+    "sin usar" e invitaba al usuario a borrar volúmenes montados.
     """
     try:
         df = await SystemService.fetch_disk_usage(docker)
     except HTTPException:
-        # Sin datos de uso el inventario sigue siendo válido, solo sin tamaños.
-        return {}
+        return None
 
     index: dict[str, dict] = {}
     for item in (df.get("VolumeUsage") or {}).get("Items") or []:
@@ -95,13 +99,14 @@ class VolumeService:
             ) from e
 
         usage = await _usage_index(docker)
+        indices = usage or {}
         summaries: list[VolumeSummary] = []
 
         for entry in _raw_volume_entries(raw):
             name = entry.get("Name") or ""
             if not name:
                 continue
-            usage_data = usage.get(name) or {}
+            usage_data = indices.get(name) or {}
             summaries.append(
                 VolumeSummary(
                     name=name,
@@ -111,6 +116,9 @@ class VolumeService:
                     created_at=entry.get("CreatedAt") or "",
                     size=_as_int(usage_data.get("Size")),
                     ref_count=_as_int(usage_data.get("RefCount")),
+                    # False = el daemon no dijo nada, así que `ref_count` no
+                    # significa "cero referencias" sino "no se sabe".
+                    usage_known=usage is not None,
                     is_anonymous=is_anonymous_volume(name),
                     labels=_clean_labels(entry.get("Labels")),
                     # Proyecto compose al que pertenece, si la etiqueta existe
@@ -135,7 +143,7 @@ class VolumeService:
                     status_code=404, detail=f"Volumen {name} no encontrado"
                 ) from e
             raise HTTPException(
-                status_code=e.status, detail=docker_error_message(e)
+                status_code=docker_error_status(e), detail=docker_error_message(e)
             ) from e
         except HTTPException:
             raise
@@ -144,7 +152,9 @@ class VolumeService:
                 status_code=500, detail=f"Error al inspeccionar el volumen: {e!s}"
             ) from e
 
-        usage = (await _usage_index(docker)).get(name) or {}
+        usage = await _usage_index(docker)
+        indices = usage or {}
+        usage_data = indices.get(name) or {}
         containers = await _containers_using(docker, name)
 
         return VolumeDetail(
@@ -153,12 +163,16 @@ class VolumeService:
             mountpoint=raw.get("Mountpoint") or "",
             scope=raw.get("Scope") or "local",
             created_at=raw.get("CreatedAt") or "",
-            size=_as_int(usage.get("Size")),
-            ref_count=_as_int(usage.get("RefCount")),
+            size=_as_int(usage_data.get("Size")),
+            ref_count=_as_int(usage_data.get("RefCount")),
+            usage_known=usage is not None,
             is_anonymous=is_anonymous_volume(raw.get("Name") or name),
             labels=_clean_labels(raw.get("Labels")),
             options=_clean_options(raw.get("Options")),
             containers=containers,
+            # El listado sí lo devolvía y el detalle no, así que el mismo volumen
+            # salía con proyecto en la tabla y sin proyecto al abrirlo.
+            compose_project=compose_project_of(raw.get("Labels")),
         )
 
     @staticmethod
@@ -187,7 +201,7 @@ class VolumeService:
                     ),
                 ) from e
             raise HTTPException(
-                status_code=e.status, detail=docker_error_message(e)
+                status_code=docker_error_status(e), detail=docker_error_message(e)
             ) from e
         except HTTPException:
             raise
@@ -245,9 +259,27 @@ class VolumeService:
 
     @staticmethod
     async def count_unused(docker: aiodocker.Docker) -> dict[str, Any]:
-        """Resumen previo a la limpieza, para que el diálogo diga qué va a pasar."""
+        """Resumen previo a la limpieza, para que el diálogo diga qué va a pasar.
+
+        Este es el endpoint que abre el diálogo de "¿qué voy a borrar?", así que
+        si no puede saber qué volúmenes están en uso **no puede decir que no lo
+        están**: contestaba `count: 7` con siete volúmenes, algunos montados en
+        contenedores vivos, porque `ref_count` salía a 0 al no poder leer
+        `/system/df`. Un 503 es menos útil que una lista, pero no invita a
+        borrar algo que está en uso.
+        """
+        usage = await _usage_index(docker)
+        if usage is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "No se pudo leer el uso de los volúmenes: el daemon no "
+                    "respondió a /system/df. No es seguro listar qué se borraría."
+                ),
+            )
+
         volumes = await VolumeService.list_volumes(docker)
-        unused = [v for v in volumes if v.ref_count == 0]
+        unused = [v for v in volumes if v.usage_known and v.ref_count == 0]
         return {
             "count": len(unused),
             "bytes": sum(v.size for v in unused),

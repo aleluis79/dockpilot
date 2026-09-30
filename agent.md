@@ -60,16 +60,34 @@ Todo desarrollo en DockPilot sigue rigurosamente el ciclo SDD de 5 etapas:
 - **El Engine API no tiene noción de proyecto compose.** Un proyecto existe únicamente como convención de etiquetas `com.docker.compose.*` sobre contenedores, redes y volúmenes. `docker compose ls` **no sirve** para inventariar: en el host de referencia devuelve un solo proyecto y omite los huérfanos, que son justo los que hay que detectar.
 - **SPEC-11 es solo lectura y no necesita el CLI de compose.** Se apoya solo en etiquetas, así que el inventario funciona entero aunque `docker compose` no esté instalado.
 
-#### `GET /api/v1/compose/browse`: el explorador está confinado (SPEC-14)
+#### El confinamiento de las rutas compose: tres entradas, una sola regla (SPEC-14, y SPEC-12/13/15 la consumen)
 El explorador de archivos existe porque la ruta había que copiarla a mano, y eso acababa en previsualizar el proyecto equivocado: en el host de referencia hay 4 compose files y el inventario solo conoce 1, porque los otros tres no están en marcha y no dejan etiquetas.
 
 Tres reglas que **no se pueden relajar** sin romper el modelo de seguridad:
 
 1. **El confinamiento se comprueba sobre la ruta ya resuelta.** `Path(path).resolve()` y luego `raiz in objetivo.parents`. Nunca `str.startswith()`: sin separador acepta `/home/alejandro` para una raíz `/home/al`, y con separador rechaza todo cuando la raíz es `/` porque buscaría `//`. Un enlace simbólico a `~/.ssh` colado en el home pasa cualquier comparación de texto, y `resolve()` es lo único que lo para.
-2. **Solo se devuelven nombres, tipos y tamaños. Nunca contenido.** Leer el archivo es de `build_plan` (SPEC-12), con su límite de tamaño y su validación. Una segunda vía de lectura sería superficie que nadie pidió.
+2. **Solo el explorador devuelve nombres, tipos y tamaños. Nunca contenido.** Leer el archivo es de `build_plan` (SPEC-12), con su límite de tamaño y su validación. Una segunda vía de lectura sería superficie que nadie pidió.
 3. **Sin `path` se devuelve la raíz, y la raíz la dice el backend.** El cliente no puede deducirla: `~` apunta al home del usuario del **backend**, no al del navegador. Si el cliente calculara la raíz por su cuenta, la regla de confinamiento estaría en dos sitios y tarde o temprano discreparían.
 
-`path` **relativa** da `400`, fuera de la raíz da `403`, y el `403` usa el mismo mensaje exista o no el destino: si se distinguieran, el endpoint serviría para mapear el disco probando rutas y leyendo códigos de respuesta.
+**Y la regla aplica a las TRES entradas que aceptan una ruta del cliente, no sólo al explorador:**
+
+| Entrada | Spec | Sin confinamiento |
+| :--- | :--- | :--- |
+| `GET /api/v1/compose/browse` | SPEC-14 | Enumerar el disco fuera del home |
+| `POST /api/v1/compose/plan` | SPEC-12 | **Leer** fuera del home y, con `content`, **escribir** en el directorio del archivo |
+| `WS /ws/compose/{action}` | SPEC-13, SPEC-15 | **Arrancar y parar** proyectos fuera del home |
+
+El caso del plan es el que obliga a tomárselo en serio: con `content`, `build_plan` vuelca lo que mandó el cliente en un temporal **junto al archivo original**, porque es lo que hace que los `env_file` y los `build.context` relativos sigan resolviendo. Un `path=/etc/docker-compose.yml` escribía en `/etc`. Y el caso del WebSocket es el que lo hace una puerta real, no decorativa: es lo que arranca proyectos de verdad, y sólo comprobaba que la ruta fuera absoluta y que existiera.
+
+Tres detalles que salen de compartir una sola regla:
+
+- **El confinamiento va antes de `exists()`, `is_file()` y `stat()`.** Ni un solo `stat` fuera de la raíz.
+- **`403` antes que `404`, y con el mismo mensaje exista o no el destino.** Distinguirlos convertiría el endpoint en un mapa del disco. Efecto secundario que hay que aceptar: una ruta **inexistente pero dentro de la raíz** da `404`, y una **fuera de la raíz** da `403` exista o no. Los tests usan `tmp_path` como raíz por eso.
+- **`_validar_ruta()` devuelve la ruta resuelta, no la recibida.** Así el temporal cae junto al archivo real y no junto al enlace simbólico por el que se entró.
+
+La puerta única al criterio es `compose_service.resolver_ruta_explorador()`; `_validar_ruta()` (SPEC-12) y el handler del WebSocket (SPEC-13) la llaman. Que viva en SPEC-14 y no en SPEC-12 es deliberado: la raíz se define ahí, las otras la consumen. Una regla escrita tres veces acaba siendo tres reglas.
+
+El fixture `archivo` de `backend/tests/conftest.py` ancla `COMPOSE_BROWSE_ROOT` a `tmp_path` por esto: sin eso, cualquier test de SPEC-12 o SPEC-13 con un archivo de `/tmp/pytest-...` recibe `403` antes de llegar al CLI.
 
 #### Desplegar desde el plan: `project_name` es obligatorio (SPEC-15)
 El WebSocket de compose **exige** `project_name` y devuelve `400` si falta. No es rigidez por gusto: compose deduce el nombre de la etiqueta `name:` del **archivo**, no del directorio, y en el host de referencia `sica/docker-compose.yml` declara `name: simp-sica` con el directorio `sica`. La función que adivinaba por directorio se borró en SPEC-15; las dos únicas fuentes que existen —el inventario y el plan— ya conocen el nombre, porque el plan lo saca del propio `config`.
@@ -110,7 +128,70 @@ SPEC-13 amplía el runner con un **modo streaming** sobre el mismo núcleo, no u
 
 **Trampa de aiodocker**: `containers.list()` devuelve objetos `DockerContainer`, no dicts, y las etiquetas viven en `_container`. Sin desenvolverlo el inventario sale vacío **sin dar ningún error**. Ver SPEC-11 §3.6.
 **Trampa del daemon**: `/volumes` devuelve `Labels: null` donde `/networks` y `/containers/json` devuelven `{}`. Normalizar con `_labels()` antes de leer.
+
+**Las formas de `/system/df` no son planas**, y adivinar la clave es como `build_cache_size` terminó siempre en 0: `BuildCacheUsage` no es un entero, es un bloque como los demás (`TotalCount`, `ActiveCount`, `TotalSize`, `Reclaimable`, `Items`), así que su tamaño hay que leerlo de `["TotalSize"]`. Lo que sí es un entero de primer nivel es `LayersSize`. Y los volúmenes no traen `Size` ni `RefCount` en el nivel superior: van anidados en cada `Item` bajo `UsageData` (SPEC-08 §3.1).
+
+Cuando el doble de test modele mal una forma, **el test pasa por la razón equivocada** y encima tapa el bug real: el doble tenía `"BuildCacheUsage": 123456789` como entero, `_as_int(dict)` devuelve 0, y la aserción de "vale 123456789" no existía. Cuando se corrige el doble hay que corregir también la aserción, o el 0 vuelve a ser indistinguible de "este host no tiene caché de build".
+
+**Un `0` que significa "no se sé" se propaga como si fuera un dato.** Si una lectura opcional falla y se devuelve un dict vacío, todo contador que se derive de ella sale a cero, y un filtro de "¿cuáles no están en uso?" pasa a listar **todos**, incluidos los que montan contenedores vivos. Es el caso de `VolumeService._usage_index()` cuando `/system/df` no responde: `_usage_index` devuelve `None` (no `{}`), `count_unused` responde **503** en vez de dar una lista que no puede sostener, y el esquema lleva `usage_known: bool` para que la UI pueda decir "el daemon no informó" en vez de "Sin usar". El patrón: **"no lo sé" tiene que ser representable**; si no lo es, acaba viajando como un cero y alguien lo lee como un hecho.
+
+#### Trampa: el `status` de un `DockerError` no es un código HTTP
+
+aiodocker lanza `DockerError(900, "Cannot connect to Docker Engine via ...")` cuando no puede hablar con el daemon. Ese **900 no es un código HTTP**, y pasarlo tal cual a `HTTPException(status_code=e.status)` hace que uvicorn indexe `STATUS_LINE[900]` y reviente con `KeyError`: el cliente recibe **nada**, `curl: (52) Empty reply from server`. No sale un 500 ni un error: no sale respuesta.
+
+Es el fallo más probable de todo el panel —dockerd parado, socket con otros permisos, daemon reiniciando—, así que la regla es: **nunca `status_code=e.status`**. El helper es `docker_error_status()`, en `app/core/docker.py`, y traduce a `503` cualquier cosa que no caiga en `[400, 600)`: el 900 de aiodocker, el 0 de `DockerStreamError`, y los 3xx, que tampoco pueden llevar cuerpo de error.
+
+La comprobación vive en `backend/tests/test_docker_errors.py`, que barre los endpoints reales con el daemon caído y verifica que ninguno devuelve un status que no se pueda servir. Si alguien vuelve a escribir `status_code=e.status`, esa lista se cae.
+
+#### Trampa: `DockerStreamError.status` es `0`, y `0` en el payload engaña
+
+El rechazo del registro al descargar una imagen (repo inexistente, registro privado) llega con **HTTP 200** y un chunk `{"error": ...}` dentro del stream. aiodocker 0.27 lo levanta como `DockerStreamError`, una subclase de `DockerError` que **fija `status=0`** porque para la petición HTTP no hubo fallo. El código real va en `error_detail["code"]`.
+
+Con `code=e.status` el frontend recibía `{"type": "error", "code": 0}`: un `0` en un campo con forma de código HTTP es indistinguible del éxito. `pull_error_code()` en `image_service.py` lee `error_detail["code"]`, y si no está deduce del texto (403/404/429/507), con 502 por defecto porque el registro es un servicio externo.
+
+El doble de `tests/conftest.py` levantaba `DockerError(404, ...)`, que es la forma de las versiones antiguas de aiodocker y que la librería ya no produce. **Cuando el doble modela mal la librería, el test pasa por la razón equivocada**: ahora levanta `DockerStreamError` con `error_detail`.
+
+#### Trampa: `receive()` de Starlette no lanza `WebSocketDisconnect`
+
+`receive_json()` no tiene guarda. Un frame de texto que no es JSON lanza `JSONDecodeError` (un `ValueError`), y uno **binario** llega sin la clave `"text"`, así que el `message["text"]` de Starlette es un **`KeyError`**, no un `TypeError`. Si eso escapa del handler del vigía de compose, el `finally` cancela la acción en curso y `ejecutar_accion` la marca como cancelada: un error de protocolo se le comunicaba al usuario como "lo cancelaste tú".
+
+Más subtil todavía: **`receive()` sí devuelve el mensaje de desconexión, no lo lanza**. Solo `receive_text()` lanza `WebSocketDisconnect`. Un vigía que hace `while True: await websocket.receive()` se queda pidiendo un segundo mensaje que no va a llegar, así que hay que mirar `mensaje["type"] == "websocket.disconnect"` a mano.
+
+#### Trampa: un WebSocket que sólo escribe no detecta al cliente que se va
+
+Starlette sólo se entera de una desconexión cuando alguien llama a `receive()`. Un handler que hace `async for` sobre un stream de Docker y solo manda mensajes no lo llama nunca, así que con un contenedor parado o inactivo se queda bloqueado en la lectura **para siempre**, con la conexión hijackeada de aiohttp. Cerrar la vista consumía una conexión del connector por visita, y tras ~100 el connector se agota y **toda** llamada a Docker empieza a fallar.
+
+El patrón es el de SPEC-13: un envío en una tarea, un vigía en `receive()` en otra, `asyncio.wait(FIRST_COMPLETED)` y `gather` en el `finally`. Y el generador de aiodocker necesita `aclosing()`, o su `ClientResponse` no se suelta hasta que pase el finalizador del bucle de eventos.
+
+Del lado del cliente, el cierre con código `1000` es **terminal** y no debe reconectar: es el cierre normal del backend cuando el stream se acaba, y reconectar ahí convertía la vista «Métricas» en un bucle infinito de 0.5 Hz contra el daemon (`stats()` sobre un contenedor parado falla con 409, el backend lo cuenta como fin de stream, cierra con 1000 otra vez…). Solo `4400` y `4404` son terminales por nombre; `1006` y `1011` sí se reintentan, con espera creciente y tope.
+
+#### Trampa: un stream sin fin no lleva plazo
+
+`TIMEOUTS_S["logs"] = 60` se aplicaba a `logs --follow`, que no termina nunca por definición. `asyncio.timeout` lo mataba a los 60 segundos y el cliente recibía un `504` seguido de `exit -1` aunque nada hubiera fallado. `timeout_de(action, follow)` devuelve `None` para ese caso, y `asyncio.timeout(None)` no arma reloj, así que el resto del código no cambia.
+
+Corolario: el **timeout no es una cancelación**. El `finally` del generador lo marcaba como `cancelada` y salía con `codigo=None`, que el handler traducía a `CODIGO_CANCELADO` (-1). El usuario veía "cancelado" sin haber cancelado nada. Hay un código aparte, `CODIGO_TIMEOUT = 124`, el de `timeout(1)`, que es un valor que el proceso real nunca devuelve.
+
 **SPEC-13 reutiliza este runner** y no abre un segundo camino de ejecución. El canal es **uno solo** (`/ws/compose/{action}`, con la acción validada contra una lista cerrada) y no cinco: cinco handlers casi idénticos serían cinco sitios donde olvidar el `finally` que mata el proceso.
+
+#### Trampa: un modal siempre montado conserva su estado entre aperturas
+
+`ContainerDetailModal`, `ImageDetailModal` y `VolumeDetailModal` los tienen sus padres **siempre montados** y sólo hacen `return null` al cerrar. Su `detail` sobrevive a cada ciclo de cerrar y abrir, así que abrir el recurso B tras el A mostraba los datos de A —imagen, estado, puertos, variables, contenedores que lo usan— bajo el nombre y el id de B, hasta que llegaba la respuesta de B.
+
+Tres reglas que salen de ahí:
+
+- **Al cambiar el objetivo se limpia el estado**: `setDetail(null)`, `setError(null)` y `setLoading(true)` al principio del efecto, antes de pedir. Un loading que sólo se pone a `false` nunca se ve.
+- **`loading` derivado de `detail === null && error === null`** es mejor que un estado aparte, porque no puede desincronizarse del fetcho.
+- **Lo mismo para un formulario**: `CreateContainerModal` vive montado, así que imagen, puertos y variables del intento anterior se reenviaban con el botón ya habilitado. Se resetea en un efecto que reacciona a `isOpen === false`, con cuidado de **no** pisar la imagen preestablecida por el padre (`initialImage`), que viene de pulsar "crear desde esta imagen" en la tabla.
+
+`NetworkDetailModal` ya lo hacía bien con `setDetail(null)`, y esa asimetría era la pista.
+
+#### Trampa: un búfer de stream sin tope no es sólo memoria
+
+El visor de logs de contenedor corta a 2000 entradas. El de compose **no cortaba nada**, y `ComposeLogsViewer` vuelve a trocear el historial entero en cada fragmento: un `logs --follow` de un servicio que parlaba mucho se convertía en O(n²) de CPU además de un heap sin límite.
+
+`utils/buffer.ts` tiene `acumular()`, una función pura que devuelve un array nuevo recortado por el frente. Pura a propósito: si devolviera el mismo array, React lo compararía por identidad y no re-renderizaría aunque los datos cambiasn. **Todas** las ramas de inserción tienen que pasar por ella, incluida la de texto plano: `useDockerLogs` tenía el recorte en la rama JSON y no en la del `catch`, así que cualquier frame que no se supiera parsear crecía sin límite.
+
+El mismo cuidado aplica al `status` de un hook con WebSocket: si se asignan `onmessage` y `onerror` pero **no `onclose`**, una caída de red deja el estado en el valor de "en curso" para siempre. En `useImagePull` eso era el spinner de la descarga girando eternamente con el pie diciendo "cerrar cancela la descarga" y sin error alguno. El `onclose` sólo pisa el estado si la operación **seguía** en curso: un `1000` limpio después de un `done` no es un fallo.
 
 #### Trampa: un hook en `App` no se desmonta al cambiar de pestaña
 `useContainers` se llama desde `App`, no desde una vista, así que **vive todo el tiempo que la app**. Solo pedía datos al montarse y al cambiar el filtro de estado, nunca al cambiar de pestaña. El síntoma era desconcertante: desplegar un proyecto desde «Proyectos» dejaba la lista de contenedores obsoleta y los contenedores nuevos no aparecían hasta tocar el filtro, porque eso era lo único que disparaba un refetch.
@@ -191,7 +272,8 @@ dockpilot/
 │   │   │   └── volume.py
 │   │   ├── services/
 │   │   │   ├── compose_cli.py      # ÚNICO módulo que lanza procesos (SPEC-12)
-│   │   │   ├── compose_service.py  # Inventario por labels (SPEC-11) y build_plan (SPEC-12)
+│   │   │   ├── compose_service.py  # Inventario (SPEC-11), build_plan (SPEC-12) y el confinamiento
+│   │   │                      # de rutas que comparten browse, plan y ciclo de vida (SPEC-14)
 │   │   │   ├── container_service.py
 │   │   │   ├── image_service.py
 │   │   │   ├── network_service.py
@@ -206,6 +288,7 @@ dockpilot/
 │   │   ├── test_create_container.py
 │   │   ├── test_image_reference.py
 │   │   ├── test_images.py
+│   │   ├── test_docker_errors.py  # Ningún endpoint devuelve un status que no se pueda servir
 │   │   ├── test_compose.py
 │   │   ├── test_networks.py
 │   │   ├── test_system.py
@@ -241,7 +324,8 @@ dockpilot/
 │   │   │                         # useNetworks, useSystemOverview, useComposeProjects, useComposeCommand
 │   │   ├── services/              # dockerApi.ts, wsUrl.ts
 │   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts, volume.ts, network.ts, system.ts, compose.ts
-│   │   ├── utils/                 # format.ts (formatBytes, formatPercent), compose.ts (rutaDeProyecto)
+│   │   ├── utils/                 # format.ts (formatBytes, formatPercent), compose.ts (rutaDeProyecto),
+│   │   │                         # buffer.ts (acumular: búfer acotado para streams)
 │   │   ├── App.tsx
 │   │   ├── main.tsx
 │   │   └── index.css              # Tokens de tema (@theme inline + @custom-variant dark)
@@ -291,7 +375,7 @@ make build         # Typecheck + build de producción del frontend
 cd backend
 source .venv/bin/activate
 pytest -v                                        # Ejecutar suite de pruebas
-python -m ruff check app                         # Lint (config en backend/pyproject.toml)
+python -m ruff check app tests                   # Lint de código Y de tests (config en backend/pyproject.toml)
 uvicorn app.main:app --reload --host 127.0.0.1  # Iniciar servidor
 ```
 
@@ -305,6 +389,8 @@ pnpm dev          # Iniciar frontend en desarrollo
 ```
 
 > `make backend-lint` es un **quality gate real**: falla ante cualquier error de Ruff. No reintroducir `|| echo "..."` en los targets del `Makefile`, porque ocultaría los fallos.
+
+> **`tests/` entra en el lint, y por una razón concreta.** Se encontró un test que usaba `DockerError` sin importarlo: el `NameError` lo convertía el `except Exception` genérico en un `500`, y la prueba pasaba verde sin haber pasado nunca por la rama de `DockerError` que pretendía ejercitar. Ruff no lo encontró porque `tests/` estaba fuera del target. Un test que pasa por la razón equivocada es peor que un test que falla: parece cobertura y no lo es.
 
 ---
 

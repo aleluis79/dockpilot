@@ -217,3 +217,69 @@ describe('VolumesView', () => {
     expect(dialog.getByText(/no se puede recuperar/i)).toBeInTheDocument()
   })
 })
+
+// --- Uso desconocido ------------------------------------------------------------
+
+describe('VolumesView con uso desconocido', () => {
+  const originalFetch = global.fetch
+
+  const sinUso: VolumeSummary = {
+    name: 'montaje-oscuro',
+    driver: 'local',
+    mountpoint: '/var/lib/docker/volumes/montaje-oscuro/_data',
+    scope: 'local',
+    created_at: '2026-09-23T10:00:00-03:00',
+    size: 1073741824,
+    // El daemon no respondió a /system/df: `ref_count` sale a 0 por defecto,
+    // pero eso NO significa que el volumen esté libre.
+    ref_count: 0,
+    usage_known: false,
+    is_anonymous: false,
+    labels: {},
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/api/v1/volumes')) {
+          return new Response(JSON.stringify([sinUso]), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        }
+        return new Response('{}', {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      })
+    )
+  })
+
+  afterEach(() => {
+    global.fetch = originalFetch
+    vi.unstubAllGlobals()
+  })
+
+  it('no mete un volumen sin dato de uso en «No usados»', async () => {
+    render(<VolumesView onDeleted={() => {}} />)
+    await waitFor(() => expect(screen.getByText('montaje-oscuro')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByRole('button', { name: /No usados/ }))
+
+    expect(screen.queryByText('montaje-oscuro')).not.toBeInTheDocument()
+  })
+
+  it('lo trata como ocupado en el diálogo de borrado', async () => {
+    render(<VolumesView onDeleted={() => {}} />)
+    await waitFor(() => expect(screen.getByText('montaje-oscuro')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTitle('Eliminar el volumen ' + sinUso.name))
+
+    const dialog = within(screen.getByRole('dialog', { name: 'Eliminar volumen' }))
+    await waitFor(() =>
+      expect(dialog.getByText(/no informó del uso de este volumen/i)).toBeInTheDocument()
+    )
+    expect(dialog.queryByText(/contenedores? lo está usando/i)).not.toBeInTheDocument()
+  })
+})

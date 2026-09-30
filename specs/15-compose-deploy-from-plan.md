@@ -1,7 +1,7 @@
 # SPEC-15: Desplegar un Compose File desde el Plan
 
 ## 1. Contexto y Objetivos
-- **Problema**: `up` ya existe y es path-driven (`compose_cli.argumentos_accion` recibe un archivo, y el handler de SPEC-13 valida que la ruta exista), pero **no hay forma de usarlo con un compose file que nunca ha corrido**. El botón `up` de la tabla toma su ruta de `config_files`, que es una etiqueta `com.docker.compose.project.config_files` que compose solo escribe *después* del primer `up`. SPEC-11 §1 ya nombró el hueco: *"Un YAML sin `up` ejecutado no ha creado nada y no deja labels: no hay nada que inventariar"*. SPEC-14 hizo esos archivos alcanzables con el explorador, así que hoy se puede **previsualizar** `sica`, `tickets-app` y `full-editor`, pero no arrancarlos: previsualizar y luego tener que abrir una terminal es exactamente el rodeo que la spec viene a quitar.
+- **Problema**: `up` ya existe y es path-driven (`compose_cli.argumentos_accion` recibe un archivo, y el handler de SPEC-13 valida que la ruta exista y esté dentro de la raíz del explorador), pero **no hay forma de usarlo con un compose file que nunca ha corrido**. El botón `up` de la tabla toma su ruta de `config_files`, que es una etiqueta `com.docker.compose.project.config_files` que compose solo escribe *después* del primer `up`. SPEC-11 §1 ya nombró el hueco: *"Un YAML sin `up` ejecutado no ha creado nada y no deja labels: no hay nada que inventariar"*. SPEC-14 hizo esos archivos alcanzables con el explorador, así que hoy se puede **previsualizar** `sica`, `tickets-app` y `full-editor`, pero no arrancarlos: previsualizar y luego tener que abrir una terminal es exactamente el rodeo que la spec viene a quitar.
 - **Objetivo**: Desplegar un compose file directamente desde su plan, reutilizando el panel de acción y los logs que ya usan las filas de la tabla, y sin crear un segundo camino de ejecución.
 - **Alcance**:
   - Incluye:
@@ -129,6 +129,8 @@ El botón se llama **Desplegar** y no **Iniciar** a propósito: "iniciar" sugier
 ```
 
 Ni el WebSocket, ni el runner, ni el hook, ni los logs se tocan. Un despliegue desde el plan y uno desde una fila ejecutan **el mismo código**: si divergieran, el preview y la realidad dejarían de cuadrar, que es exactamente lo que SPEC-12 §3.1 juego para evitar.
+
+Que el mismo código reciba la ruta tiene una consecuencia que conviene dejar escrita: el despliegue desde el plan **no es una puerta trasera al confinamiento**. `plan.source_path` pasa por la misma validación del canal de SPEC-13 que la ruta de una fila —absoluta, dentro de la raíz del explorador, existente—, y un `403` llega como frame de error igual que en cualquier otra acción. Como el plan sólo se pide para rutas ya confinadas (SPEC-12 §3.5), el `source_path` de un plan válido siempre cumple las tres, pero la comprobación no se salta por venir de un plan: es la misma línea de código, y esa es la garantía.
 
 ### 3.3 Por qué este camino no lleva `--remove-orphans`
 

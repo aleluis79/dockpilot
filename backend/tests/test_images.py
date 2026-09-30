@@ -227,3 +227,52 @@ def test_ws_pull_normalizes_missing_tag(test_client: TestClient):
         start = ws.receive_json()
         assert start["type"] == "start"
         assert start["image"] == "alpine:latest"
+
+
+# --- Código del error de descarga ---------------------------------------------
+
+
+def test_el_error_de_registro_no_llega_con_codigo_cero():
+    """`DockerStreamError.status` es 0 y ese 0 no puede viajar como código.
+
+    El rechazo del registro es el fallo más común de un pull (repo inexistente,
+    registro privado) y llega con HTTP 200 + un chunk de error dentro del
+    stream. aiodocker lo levanta como `DockerStreamError`, que fija `status=0`
+    porque para la petición HTTP no hubo fallo. Mandar `code: 0` al frontend lo
+    hacía indistinguible del éxito.
+    """
+    from aiodocker.exceptions import DockerError, DockerStreamError
+
+    from app.services.image_service import pull_error_code
+
+    # El caso real: el código verdadero viaja en error_detail.
+    con_detalle = DockerStreamError(
+        "pull access denied for nginx-este-no-existe",
+        error_detail={"code": 404},
+    )
+    assert con_detalle.status == 0
+    assert pull_error_code(con_detalle) == 404
+
+    # Sin detalle, se deduce del texto.
+    assert pull_error_code(DockerStreamError("requested access to the resource is denied")) == 403
+    assert pull_error_code(DockerStreamError("repository does not exist")) == 404
+    assert pull_error_code(DockerStreamError("manifest unknown")) == 404
+    assert pull_error_code(DockerStreamError("toomanyrequests: pull rate limit")) == 429
+
+    # Sin ninguna pista: el registro es externo, no el panel.
+    assert pull_error_code(DockerStreamError("cosas raras del registro")) == 502
+
+    # El 900 de aiodocker es "no pude hablar con el daemon", no un fallo de pull.
+    assert pull_error_code(DockerError(900, "Cannot connect to Docker Engine")) == 503
+
+    # Un código HTTP de verdad se respeta tal cual.
+    assert pull_error_code(DockerError(409, {"message": "conflict"})) == 409
+
+    # Nunca 0, que es lo que rompía al cliente.
+    for exc in (
+        con_detalle,
+        DockerStreamError("denied"),
+        DockerError(900, "Cannot connect to Docker Engine"),
+        DockerError(0, {"message": "raro"}),
+    ):
+        assert pull_error_code(exc) != 0

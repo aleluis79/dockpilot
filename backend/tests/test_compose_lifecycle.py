@@ -6,9 +6,11 @@ binario: `fake_spawn` sustituye `_crear_proceso`.
 """
 
 import asyncio
+from unittest.mock import patch
 
 import pytest
 
+from app.services import compose_cli
 from app.services.compose_cli import (
     ACCIONES_CON_SERVICIO,
     ComposeCliAusente,
@@ -110,9 +112,40 @@ async def test_timeout_por_accion():
     # colgado tardaría quince minutos en avisar.
     assert timeout_de("stop") == 60.0
     assert timeout_de("down") == 60.0
-    assert timeout_de("logs") == 60.0
     assert timeout_de("pull") == 600.0
     assert timeout_de("up") == 900.0
+
+
+async def test_un_follow_no_lleva_reloj():
+    # `logs --follow` no termina nunca por su cuenta: si se le pone el plazo de
+    # 60 s, `asyncio.timeout` mata el proceso y el cliente ve un 504 + exit -1
+    # aunque nada haya fallado. Sin follow sí tiene fin y conserva el plazo.
+    assert timeout_de("logs", follow=True) is None
+    assert timeout_de("logs", follow=False) == 60.0
+
+
+async def test_seguimiento_largo_no_lo_mata_el_reloj(fake_spawn):
+    # El bug en vivo: un `logs --follow` de más de un minuto terminaba con
+    # `ComposeCliTimeout` y el proceso recibía un SIGKILL. El stream de un
+    # `--follow` no termina nunca, así que se toman los trozos a mano y se
+    # cierra el generador, que es lo que hace el cliente al cerrar la vista.
+    fake_spawn.devolver(stdout_trozos=[b"linea 1\n", b"linea 2\n"], cuelga_solo="stdout")
+
+    resultado = ResultadoAccion()
+    with patch.dict(compose_cli.TIMEOUTS_S, {**compose_cli.TIMEOUTS_S, "logs": 0.05}):
+        generador = ejecutar_accion("logs", ARCHIVO, resultado=resultado)
+        trozos = []
+        for _ in range(2):
+            trozos.append((await anext(generador)).data)
+            # Más que el plazo: si `asyncio.timeout` estuviera armado, el proceso
+            # ya habría muerto y no habría segundo trozo.
+            await asyncio.sleep(0.1)
+        await generador.aclose()
+
+    assert trozos == ["linea 1\n", "linea 2\n"]
+    # El cierre del cliente cancela de verdad, y eso no es un timeout.
+    assert resultado.cancelada is True
+    assert resultado.codigo is None
 
 
 # --- Streaming -----------------------------------------------------------------
@@ -269,3 +302,37 @@ async def test_los_lectores_se_paran_al_cancelar(fake_spawn):
     # Nadie vuelve a pedirle nada: los lectores están parados.
     assert pipe.peticiones == lecturas
     assert fake_spawn.proceso.killed is True
+
+
+# --- El servicio es un nombre, no un flag --------------------------------------
+
+
+@pytest.mark.parametrize(
+    "service",
+    ["--tail=99999", "--timeout=0", "-f", "--file", "-", "--profile", "-p", "x;rm -rf /", "a b"],
+)
+async def test_el_servicio_no_puede_ser_un_flag(service):
+    """Va como argumento POSICIONAL, así que un `-` inicial se lee como opción.
+
+    Sin esto, `service="--tail=99999"` llegaba al argv tal cual y compose lo
+    interpretaba como flag de la acción, no como nombre de servicio. No es
+    inyección de shell (`shell=False`), pero sí de argumentos, en un comando
+    que para contenedores o baja proyectos.
+    """
+    with pytest.raises(ValueError, match="Nombre de servicio no válido"):
+        argumentos_accion("logs", ARCHIVO, project_name="p", service=service)
+
+
+@pytest.mark.parametrize("service", ["web", "db", "api_v2", "front.end", "svc-1", "web2"])
+async def test_los_servicios_validos_siguen_pasando(service):
+    args = argumentos_accion("stop", ARCHIVO, project_name="p", service=service)
+
+    assert args[-1] == service
+    assert service in args
+
+
+async def test_el_servicio_solo_se_valida_en_las_acciones_que_lo_aceptan():
+    """`up` y `down` no llevan servicio, así que un flag ahí no llega al argv."""
+    args = argumentos_accion("up", ARCHIVO, project_name="p", service="--tail=1")
+
+    assert "--tail=1" not in args

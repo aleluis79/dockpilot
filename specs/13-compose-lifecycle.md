@@ -74,7 +74,7 @@ class ComposeExit(BaseModel):
 
 class ComposeCommandError(BaseModel):
     type: Literal["error"] = "error"
-    code: int = Field(..., description="400 | 404 | 409 | 503 | 504")
+    code: int = Field(..., description="400 | 403 | 404 | 409 | 503 | 504")
     message: str
 
 # --- Mensaje que envía el cliente ---
@@ -146,7 +146,9 @@ Todos precedidos de `docker`. En ningún caso `--force`, `--remove-orphans` en `
 El orden de validación es deliberado y es la diferencia entre un error útil y uno inútil:
 
 1. `action` contra la lista cerrada → si no está, `404` **antes** de leer nada.
-2. `path` absoluta y existente → `400` / `404`. Igual que en SPEC-12: una ruta relativa se resolvería contra el directorio del backend.
+2. `path` absoluta, dentro de la raíz del explorador y existente → `400` / `403` / `404`. Igual que en SPEC-12: una ruta relativa se resolvería contra el directorio del backend. El confinamiento es el de SPEC-14 §3.2, el mismo que aplican el explorador y el plan, y va **antes** del `is_file()` para no dar ni un `stat` fuera de la raíz.
+
+   Este canal es lo que arranca y lo que para proyectos reales, así que sin este paso era la única vía para operar un compose file que el selector de ficheros no deja ni ver: `path` sólo comprobaba que fuera absoluta y que existiera.
 3. Para `down` con `volumes=true`, **el proyecto no debe tener contenedores en marcha** → `409`. Compose no lo impediría, pero detenerlos por sorpresa para después borrarles los volúmenes es peor que exigir una parada explícita.
 4. Solo entonces se lanza el proceso.
 
@@ -189,7 +191,8 @@ Esto evita un acoplamiento entre SPEC-13 y SPEC-11 por el que el servicio de com
 | :--- | :--- | :--- |
 | Acción no permitida | `404` | `action` fuera de la lista cerrada |
 | `path` no absoluta | `400` | Validada antes de leer |
-| Archivo inexistente | `404` | Validada antes de leer |
+| `path` fuera de la raíz del explorador | `403` | Confinamiento de SPEC-14 §3.2, antes del `is_file()` |
+| Archivo inexistente | `404` | Validada después de confirmar que la ruta está dentro de la raíz |
 | `down --volumes` con contenedores en marcha | `409` | Comprobado contra el daemon |
 | CLI ausente | `503` | `FileNotFoundError` en el spawn |
 | Se superó el tiempo de la acción | `504` | `asyncio.wait_for` expiró; el proceso se mató |
@@ -338,8 +341,19 @@ Característica: Ciclo de vida de proyectos Docker Compose
 
   Escenario: Archivo inexistente
     Dado que la ruta indicada no existe en el host
+    Y que la ruta está dentro de la raíz del explorador
     Cuando el usuario abre cualquiera de los canales
     Entonces el servidor emite un error con código 404
+    Y no se lanza ningún proceso
+
+    La ruta tiene que estar dentro de la raíz: una que sale da 403 antes de
+    comprobar que exista, porque distinguirlos serviría para enumerar el disco.
+
+  Escenario: Ruta fuera de la raíz del explorador
+    Dado que la ruta indicada sale de la raíz del explorador
+    Y que el archivo existe y es un compose válido
+    Cuando el usuario abre cualquiera de los canales
+    Entonces el servidor emite un error con código 403
     Y no se lanza ningún proceso
 
   Escenario: El CLI no está instalado
@@ -372,7 +386,8 @@ Característica: Ciclo de vida de proyectos Docker Compose
   - `test_logs_de_un_servicio_lleva_el_argumento_de_servicio`.
   - `test_accion_fuera_de_la_lista_devuelve_404`: sin lanzar proceso.
   - `test_ruta_no_absoluta_devuelve_400`: validada antes de leer.
-  - `test_archivo_inexistente_devuelve_404`.
+  - `test_archivo_inexistente_devuelve_404`: con la ruta **dentro** de la raíz (`tmp_path`), porque fuera da 403 antes.
+  - `test_una_ruta_fuera_de_la_raiz_no_arranca_nada`: el CLI no se lanza siquiera.
   - `test_cli_ausente_devuelve_503`.
   - `test_timeout_devuelve_504_y_termina_el_proceso`.
   - `test_fallo_de_compose_es_exit_y_no_error`: `code != 0` produce `exit` y nunca `error`.

@@ -39,6 +39,24 @@ export const CreateContainerModal: React.FC<CreateContainerModalProps> = ({
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
+  // El modal está siempre montado y sólo hace `return null` al cerrarse, así que
+  // su estado sobrevive a cada apertura. Antes, abrir «Nuevo contenedor» tras
+  // intentar crear uno y dejar la imagen a medias reenviaba la imagen, los
+  // puertos y las variables del intento anterior con el botón ya habilitado.
+  useEffect(() => {
+    if (isOpen) return
+    setImage('')
+    setName('')
+    setCommand('')
+    setRestartPolicy('no')
+    setStartNow(true)
+    setPorts([])
+    setEnvVars([])
+    setVolumes([])
+    setLoading(false)
+    setError(null)
+  }, [isOpen])
+
   // Preseleccionar la imagen cuando se abre el modal con una referencia
   useEffect(() => {
     if (isOpen && initialImage) setImage(initialImage)

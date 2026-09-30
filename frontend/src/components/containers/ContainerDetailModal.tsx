@@ -24,6 +24,14 @@ export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
 
     let isMounted = true
 
+    // El modal no se desmonta al cerrar: sus padre lo tienen siempre montado y
+    // sólo hace `return null`. Sin limpiar el `detail`, abrir el contenedor B
+    // tras el A mostraba los datos de A (imagen, estado, puertos, variables)
+    // bajo el nombre de B hasta que llegaba la respuesta de B.
+    setDetail(null)
+    setError(null)
+    setLoading(true)
+
     dockerApi
       .getContainer(container.id)
       .then((data) => {

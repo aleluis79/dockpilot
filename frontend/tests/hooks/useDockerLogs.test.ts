@@ -53,3 +53,50 @@ describe('useDockerLogs', () => {
     expect(result.current.logs).toEqual([])
   })
 })
+
+// --- El tope también vale para los frames que no son JSON ----------------------
+
+describe('useDockerLogs con frames que no son JSON', () => {
+  const originalWebSocket = global.WebSocket
+  const abiertos: SocketConCrudo[] = []
+
+  class SocketConCrudo extends MockWebSocket {
+    /** Manda algo que `JSON.parse` no sabe leer. */
+    crudo(data: string) {
+      act(() => {
+        if (this.onmessage) this.onmessage({ data })
+      })
+    }
+  }
+
+  beforeEach(() => {
+    abiertos.length = 0
+    // @ts-expect-error Mocking WebSocket
+    global.WebSocket = class extends SocketConCrudo {
+      constructor(url: string) {
+        super(url)
+        abiertos.push(this)
+        act(() => {
+          if (this.onopen) this.onopen()
+        })
+      }
+    }
+  })
+
+  afterEach(() => {
+    global.WebSocket = originalWebSocket
+  })
+
+  it('recorta también la rama de texto plano', () => {
+    // Antes sólo la rama JSON pasaba por el recorte, así que cualquier cosa que
+    // no supiera parsear (una página de error de un proxy, un modo de log en
+    // crudo) hacía crecer el búfer sin límite aunque `maxLines` pusiera techo.
+    const { result } = renderHook(() => useDockerLogs('c123', { maxLines: 5 }))
+
+    act(() => {
+      for (let i = 0; i < 50; i++) abiertos[0].crudo('esto no es json')
+    })
+
+    expect(result.current.logs).toHaveLength(5)
+  })
+})

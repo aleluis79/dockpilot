@@ -37,6 +37,10 @@ export const ImageDetailModal: React.FC<ImageDetailModalProps> = ({ imageId, onC
     if (!imageId) return
 
     let isMounted = true
+    // El modal no se desmonta al cerrar, así que el detalle de la imagen
+    // anterior seguía en el estado: abrir la imagen B tras la A pintaba los tags
+    // y el historial de A hasta que llegaba la respuesta de B.
+    setDetail(null)
     setError(null)
 
     dockerApi

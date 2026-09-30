@@ -318,10 +318,51 @@ async def test_ruta_no_absoluta_devuelve_400(plan_client, fake_spawn):
     assert fake_spawn.calls == [], "no se llama al CLI si la ruta no vale"
 
 
-async def test_archivo_inexistente_devuelve_404(plan_client, fake_spawn):
-    r = await _plan(plan_client, path="/no/existe/docker-compose.yml")
+async def test_archivo_inexistente_devuelve_404(plan_client, fake_spawn, archivo):
+    # La ruta va DENTRO de la raíz del explorador: una que está fuera da 403
+    # antes de llegar al `exists()`, y ese orden es intencionado (no se
+    # distingue "fuera de la raíz" de "no existe" para no servir de mapa del disco).
+    r = await _plan(
+        plan_client,
+        path=str(archivo.parent / "no-existe" / "docker-compose.yml"),
+    )
 
     assert r.status_code == 404
+    assert fake_spawn.calls == []
+
+
+async def test_una_ruta_fuera_de_la_raiz_da_403(plan_client, fake_spawn, tmp_path):
+    """El plan se confina igual que el explorador (SPEC-14 §3.2).
+
+    Con `content`, `_escribir_temporal` volca lo que mandó el cliente en el
+    directorio del archivo. Sin confinamiento, `path=/etc/docker-compose.yml`
+    escribía en `/etc`: el explorador confines la lectura y el plan no
+    confinaba ni la lectura ni la escritura.
+    """
+    fuera = tmp_path.parent / "plan-fuera-de-raiz"
+    fuera.mkdir(exist_ok=True)
+    (fuera / "docker-compose.yml").write_text("services:\n  web:\n    image: nginx\n")
+
+    r = await _plan(plan_client, path=str(fuera / "docker-compose.yml"))
+
+    assert r.status_code == 403
+    assert fake_spawn.calls == []
+    # Y no se ha escrito nada donde fuera.
+    assert list(fuera.iterdir()) == [fuera / "docker-compose.yml"]
+
+
+async def test_el_contenido_editado_no_se_escribe_fuera_de_la_raiz(plan_client, fake_spawn, tmp_path):
+    """Con `content` el temporal cae junto al archivo real, y sólo si es legal."""
+    fuera = tmp_path.parent / "plan-fuera-para-contenido"
+    fuera.mkdir(exist_ok=True)
+    objetivo = fuera / "docker-compose.yml"
+    objetivo.write_text("services:\n  web:\n    image: nginx\n")
+
+    r = await _plan(plan_client, path=str(objetivo), content="services: {}\n")
+
+    assert r.status_code == 403
+    # Lo que había sigue intacto: no se prependió ningún temporal.
+    assert objetivo.read_text() == "services:\n  web:\n    image: nginx\n"
     assert fake_spawn.calls == []
 
 
@@ -428,3 +469,52 @@ async def test_sin_contenido_se_usa_el_archivo_de_disco(plan_client, fake_spawn,
     assert r.status_code == 200
     # Se pasa la ruta del usuario, no un temporal.
     assert str(archivo) in fake_spawn.ultima.args
+
+
+# --- El temporal no se queda si la escritura falla -----------------------------
+
+
+async def test_un_temporal_roto_no_se_queda_en_disco(tmp_path, monkeypatch):
+    """Si el `write` falla, el archivo temporal tampoco se queda ahí.
+
+    El `mkstemp` ya lo había creado en disco, así que cuando la escritura fallaba
+    (ENOSPC, EIO) el `fdopen` cerraba el descriptor pero el archivo se quedaba.
+    El `finally` del llamante no lo recogía porque la excepción salía de la
+    función que lo había creado: un temporal huérfano por cada preview fallido.
+    """
+    import os
+
+    from fastapi import HTTPException
+
+    from app.services.compose_service import _escribir_temporal
+
+    class EscritorSinEspacio:
+        """Lo que devuelve `os.fdopen` cuando el disco se llenó al escribir."""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def write(self, _datos):
+            raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(os, "fdopen", lambda *_a, **_k: EscritorSinEspacio())
+
+    with pytest.raises(HTTPException) as exc:
+        _escribir_temporal(tmp_path, "services: {}\n")
+
+    assert exc.value.status_code == 400
+    assert list(tmp_path.iterdir()) == [], "el temporal se quedó en disco"
+
+
+async def test_un_temporal_correcto_se_escribe_y_se_puede_borrar(tmp_path):
+    from app.services.compose_service import _borrar_temporal, _escribir_temporal
+
+    ruta = _escribir_temporal(tmp_path, "services: {}\n")
+    assert ruta.exists()
+    assert ruta.read_text() == "services: {}\n"
+
+    _borrar_temporal(ruta)
+    assert not ruta.exists()

@@ -51,11 +51,36 @@ def test_ruta_no_absoluta_devuelve_400(ws_client, fake_spawn):
     assert fake_spawn.calls == []
 
 
-def test_archivo_inexistente_devuelve_404(ws_client, fake_spawn):
-    with _abrir(ws_client, "up", path="/no/existe/dc.yml") as ws:
+def test_archivo_inexistente_devuelve_404(ws_client, fake_spawn, archivo):
+    # La ruta va DENTRO de la raíz del explorador: una que está fuera da 403
+    # antes de llegar al `is_file()`, y ese orden es intencionado (no se
+    # distingue "fuera de la raíz" de "no existe" para no servir de mapa del disco).
+    with _abrir(
+        ws_client, "up", path=str(archivo.parent / "no-existe" / "dc.yml")
+    ) as ws:
         mensaje = ws.receive_json()
     assert mensaje["code"] == 404
     assert fake_spawn.calls == []
+
+
+def test_una_ruta_fuera_de_la_raiz_no_arranca_nada(ws_client, fake_spawn, tmp_path):
+    """El ciclo de vida comparte confinamiento con el explorador y el plan.
+
+    Sin esto, este canal era la única vía para arrancar un compose file fuera de
+    la raíz: `path` sólo comprobaba que fuera absoluta y que existiera, así que
+    un archivo que el selector no deja ni ver se podía arrancar desde aquí.
+    """
+    fuera = tmp_path.parent / "ws-fuera-de-raiz"
+    fuera.mkdir(exist_ok=True)
+    objetivo = fuera / "docker-compose.yml"
+    objetivo.write_text("services:\n  web:\n    image: nginx:1.27\n")
+
+    with _abrir(ws_client, "up", path=str(objetivo), project_name="p") as ws:
+        mensaje = ws.receive_json()
+
+    assert mensaje["type"] == "error"
+    assert mensaje["code"] == 403
+    assert fake_spawn.calls == [], "se lanzó el CLI con una ruta fuera de la raíz"
 
 
 # --- down --volumes: la única acción irreversible -------------------------------
@@ -237,6 +262,33 @@ def test_timeout_devuelve_504_y_termina_el_proceso(
     assert fake_spawn.proceso.waited is True
 
 
+def test_el_timeout_no_se_reporta_como_cancelacion_del_usuario(
+    ws_client, fake_spawn, archivo, monkeypatch
+):
+    """Un timeout es un timeout, no "lo cancelaste tú".
+
+    `codigo` se quedaba en `None` al expirar el reloj, y quien lo leía lo
+    traducía a -1: el cliente marcaba la acción como cancelada para el mismo
+    evento en el que ya había recibido un 504. El usuario no había cancelado
+    nada, y el botón de cancelar queda desincronizado del resto de la UI.
+    """
+    from app.services.compose_cli import CODIGO_TIMEOUT
+
+    fake_spawn.devolver(cuelga=True)
+    monkeypatch.setattr("app.services.compose_cli.TIMEOUTS_S", {"up": 0.05})
+
+    with _abrir(ws_client, "up", path=str(archivo), project_name="p") as ws:
+        ws.receive_json()  # start
+        error = ws.receive_json()
+        assert error["type"] == "error"
+        assert error["code"] == 504
+        salida = ws.receive_json()
+
+    assert salida["type"] == "exit"
+    assert salida["code"] == CODIGO_TIMEOUT, "el timeout se reportó como cancelación"
+    assert salida["code"] not in (-1, 0), "un timeout no es ni cancelación ni éxito"
+
+
 # --- Cancelación ---------------------------------------------------------------
 
 
@@ -403,3 +455,36 @@ def test_una_accion_invalida_sigue_ganando_a_la_falta_de_nombre(ws_client, fake_
         mensaje = ws.receive_json()
 
     assert mensaje["code"] == 404
+
+
+# --- Frames que no son JSON ----------------------------------------------------
+
+
+def test_un_frame_no_json_no_cancela_la_accion(ws_client, fake_spawn, archivo):
+    """Un error de protocolo no puede reportarse como "lo cancelaste tú".
+
+    `receive_json()` no tiene guarda: un frame de texto que no es JSON lanza
+    `JSONDecodeError` y uno binario deja `text` a `None`, que es `TypeError`.
+    Ninguno es un cierre, pero los dos mataban el vigía; el `finally` del handler
+    cancelaba entonces la acción y el cliente recibía `exit -1`, o sea la misma
+    señal que un «Cancelar» del usuario.
+    """
+    fake_spawn.devolver(stdout_trozos=[b"primera\n", b"segunda\n"], cuelga_solo="stdout")
+
+    with _abrir(ws_client, "logs", path=str(archivo), project_name="p") as ws:
+        assert ws.receive_json()["type"] == "start"
+        assert ws.receive_json()["type"] == "output"
+
+        # Basura en el canal de control.
+        ws.send_text("esto no es json {{{")
+        ws.send_bytes(b"\x00\x01\x02no-json")
+
+        # La acción sigue viva: llega más salida.
+        assert ws.receive_json()["type"] == "output"
+
+        # Y al cancelar de verdad, se cancela de verdad.
+        ws.send_json({"type": "cancel"})
+        fin = ws.receive_json()
+
+    assert fin["type"] == "exit"
+    assert fake_spawn.proceso.killed is True

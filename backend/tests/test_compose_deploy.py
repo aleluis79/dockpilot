@@ -11,7 +11,6 @@ import json
 
 import pytest
 
-from app.schemas.compose import ComposePlanRequest
 from app.services.compose_service import _colision
 
 pytestmark = pytest.mark.asyncio
@@ -223,3 +222,56 @@ async def test_el_plan_avisa_de_la_colision_de_nombre(
     assert colision is not None
     assert colision["nombre"] == "tickets-app"
     assert colision["mismo_archivo"] is False
+
+
+# --- El plan cuando el daemon no responde -------------------------------------
+
+
+async def test_sin_daemon_los_recursos_no_parecen_existentes(mock_docker):
+    """"No lo sé" no es "sí, ya existe".
+
+    `_a_recursos` calcula `exists = real in ya_existentes`, así que devolver los
+    nombres declarados cuando la lectura falla marcaba TODAS las redes y
+    volúmenes del preview como ya creados. Con el daemon caído, "no lo sé" tiene
+    que traducirse a "no existe", no a "ya está".
+    """
+    import aiodocker
+
+    datos = {
+        "networks": {"front": {"name": "tienda_front"}},
+        "volumes": {"data": {"name": "tienda_data"}},
+    }
+
+    async def fallo(*_args, **_kwargs):
+        raise aiodocker.exceptions.DockerError(900, "Cannot connect to Docker Engine")
+
+    mock_docker.networks.list = fallo
+    mock_docker.volumes.list = fallo
+
+    from app.schemas.compose import PlannedNetwork, PlannedVolume
+    from app.services.compose_service import _a_recursos, _nombres_existentes
+
+    existentes = await _nombres_existentes(mock_docker, datos)
+    assert existentes == {"networks": set(), "volumes": set()}
+
+    redes = _a_recursos(datos["networks"], PlannedNetwork, existentes)
+    volumenes = _a_recursos(datos["volumes"], PlannedVolume, existentes)
+
+    assert [n.name for n in redes] == ["tienda_front"]
+    assert all(n.exists is False for n in redes)
+    assert [v.name for v in volumenes] == ["tienda_data"]
+    assert all(v.exists is False for v in volumenes)
+
+
+async def test_con_daemon_sin_esos_recursos_no_existen(mock_docker):
+    """El caso normal: se listan, no existen, y el plan dice que se crearán."""
+    datos = {
+        "networks": {"front": {"name": "tienda_front"}},
+        "volumes": {"data": {"name": "tienda_data"}},
+    }
+
+    from app.services.compose_service import _nombres_existentes
+
+    existentes = await _nombres_existentes(mock_docker, datos)
+    assert existentes["networks"] == set()
+    assert existentes["volumes"] == set()

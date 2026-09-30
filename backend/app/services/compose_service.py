@@ -460,6 +460,13 @@ def _validar_ruta(path: str, content: str | None) -> str:
 
     El orden importa: una ruta relativa se rechazaría más tarde, en el CLI, con un
     error que no menciona que el problema es la ruta.
+
+    El confinamiento a `COMPOSE_BROWSE_ROOT` es el mismo que aplica `browse`
+    (SPEC-14 §3.2), y va **antes** de tocar el disco por una razón concreta: con
+    `content`, `_escribir_temporal` volca lo que mandó el cliente en el directorio
+    del archivo. Sin esta comprobación, `POST /compose/plan` con
+    `path=/etc/docker-compose.yml` escribía en `/etc`. El explorador confines la
+    lectura y el plan no confinaba ni la lectura ni la escritura.
     """
     if not path.startswith("/"):
         raise HTTPException(
@@ -475,7 +482,7 @@ def _validar_ruta(path: str, content: str | None) -> str:
             detail=f"El contenido editado supera el máximo de {MAX_ARCHIVO_BYTES} bytes",
         )
 
-    ruta = Path(path)
+    ruta = _resolver_dentro(path, _raiz_browse())
     if not ruta.exists():
         raise HTTPException(
             status_code=404, detail=f"No existe el archivo: {path}"
@@ -495,7 +502,10 @@ def _validar_ruta(path: str, content: str | None) -> str:
             status_code=413,
             detail=f"El archivo supera el máximo de {MAX_ARCHIVO_BYTES} bytes",
         )
-    return path
+    # Se devuelve la ruta **resuelta**, no la que llegó: `_escribir_temporal`
+    # escribe en `Path(ruta).parent`, y con la cadena original el temporal
+    # caería junto al enlace simbólico en vez de junto al archivo real.
+    return str(ruta)
 
 
 def _escribir_temporal(directorio: Path, content: str) -> Path:
@@ -516,8 +526,20 @@ def _escribir_temporal(directorio: Path, content: str) -> Path:
                 f"No se pudo preparar el contenido editado en {directorio}: {error}"
             ),
         ) from error
-    with os.fdopen(descriptor, "w", encoding="utf-8") as archivo:
-        archivo.write(content)
+    # La escritura va dentro del `try` porque el temporal ya existe en disco
+    # desde el `mkstemp`: si `write` falla (ENOSPC, EIO), el `fdopen` cerraba el
+    # descriptor pero el archivo se quedaba ahí, y el `finally` del llamante no
+    # llega a ejecutarse porque la excepción sale de aquí. Un temporal por preview
+    # fallido, para siempre.
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as archivo:
+            archivo.write(content)
+    except OSError as error:
+        _borrar_temporal(Path(nombre))
+        raise HTTPException(
+            status_code=400,
+            detail=f"No se pudo escribir el contenido editado en {directorio}: {error}",
+        ) from error
     return Path(nombre)
 
 
@@ -710,8 +732,12 @@ async def _nombres_existentes(
         redes = {str(_as_dict(n).get("Name")) for n in await docker.networks.list()}
         crudos = await docker.volumes.list()
         volumenes = {str(_as_dict(v).get("Name")) for v in _as_dict(crudos).get("Volumes") or []}
-    except Exception:  # El plan no debe depender de esta lectura
-        return declaradas
+    except Exception:
+        # Vacío, no `declaradas`: `_a_recursos` calcula `exists = real in
+        # ya_existentes`, así que devolver los declarados marcaría TODOS los
+        # recursos del preview como "ya existe" cuando en realidad no se pudo
+        # preguntar. "No lo sé" tiene que ser distinto de "sí, existe".
+        return {"networks": set(), "volumes": set()}
     return {
         "networks": redes & declaradas["networks"],
         "volumes": volumenes & declaradas["volumes"],
@@ -827,6 +853,18 @@ def _resolver_dentro(path: str, raiz: Path) -> Path:
             ),
         )
     return objetivo
+
+
+def resolver_ruta_explorador(path: str) -> Path:
+    """Resuelve `path` y la confina a la raíz del explorador.
+
+    Es el mismo criterio que `browse` (SPEC-14 §3.2) y que `_validar_ruta`, en una
+    versión que lanza `HTTPException` para que el canal WebSocket pueda traducir
+    el código a su frame de error. Existe como función aparte porque el
+    explorador, el plan y el ciclo de vida son tres entradas distintas con la
+    misma regla, y una regla escrita tres veces acaba siendo tres reglas.
+    """
+    return _resolver_dentro(path, _raiz_browse())
 
 
 def _es_fichero_compose(nombre: str) -> bool:

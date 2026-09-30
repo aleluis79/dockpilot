@@ -7,6 +7,12 @@ export interface VolumeSummary {
   created_at: string;
   size: number;
   ref_count: number;
+  /**
+   * False si el daemon no pudo informar del uso. Entonces `ref_count` vale 0 por
+   * defecto y NO significa que el volumen esté libre: no se puede afirmar que
+   * sea eliminable.
+   */
+  usage_known: boolean;
   is_anonymous: boolean;
   labels: Record<string, string>;
   /** Proyecto Docker Compose al que pertenece, si la etiqueta existe. */

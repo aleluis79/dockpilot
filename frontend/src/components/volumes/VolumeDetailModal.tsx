@@ -35,6 +35,9 @@ export const VolumeDetailModal: React.FC<VolumeDetailModalProps> = ({ name, onCl
     if (!name) return
 
     let isMounted = true
+    // Igual que en los otros modales: sin esto, abrir el volumen B tras el A
+    // pintaba los datos de A (tamaño, contenedores que lo usan) bajo B.
+    setDetail(null)
     setError(null)
 
     dockerApi

@@ -32,6 +32,7 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [autoScroll, setAutoScroll] = useState<boolean>(true)
   const [copied, setCopied] = useState<boolean>(false)
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [streamFilter, setStreamFilter] = useState<'all' | 'stdout' | 'stderr'>('all')
 
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -71,11 +72,20 @@ export const LogsViewer: React.FC<LogsViewerProps> = ({
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      // Se cancela el temporizador anterior en vez de apilarlos: sin esto, cada
+      // clic extraía un temporizador más y todos disparaban al cabo de 2 s.
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+      copyTimerRef.current = setTimeout(() => setCopied(false), 2000)
     } catch {
       // Fallback
     }
   }
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
 
   return (
     <div className="flex flex-col h-full min-h-0 bg-surface text-fg rounded-2xl border border-default shadow-2xl overflow-hidden font-sans">

@@ -5,12 +5,11 @@ import json
 import shlex
 import time
 from contextlib import aclosing
-from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import aiodocker
 from aiodocker.exceptions import DockerError
-from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 
 from app.core.docker import docker_error_message, get_docker
 from app.schemas.compose import (
@@ -20,9 +19,9 @@ from app.schemas.compose import (
     ComposeOutput,
 )
 from app.schemas.image import ImagePullMessage
-from app.services import compose_cli
+from app.services import compose_cli, compose_service
 from app.services.container_service import parse_docker_log_line
-from app.services.image_service import ImageService, normalize_image_ref
+from app.services.image_service import ImageService, normalize_image_ref, pull_error_code
 from app.services.stats_service import StatsService
 
 DockerDep = Annotated[aiodocker.Docker, Depends(get_docker)]
@@ -73,9 +72,26 @@ async def container_logs_ws(
             stdout=True, stderr=True, follow=follow, tail=tail, timestamps=timestamps
         )
         stream = await res if inspect.iscoroutine(res) else res
-        async for line in stream:
-            entry = parse_docker_log_line(line)
-            await websocket.send_json(entry.model_dump())
+        # Ni `receive()` ni `aclosing`, y el handler se quedaba dormido para
+        # siempre: Starlette sólo se entera de que el cliente se fue cuando
+        # alguien llama a `receive()`, y sin `aclosing` el `ClientResponse` de
+        # aiodocker no se suelta hasta que pase el finalizador del bucle de
+        # eventos. Con un contenedor parado o inactivo, cerrar la vista
+        # consumía una conexión del connector para siempre.
+        envio = asyncio.create_task(
+            _ws_enviar_logs(websocket, stream, timestamps), name=f"logs-{container_id}"
+        )
+        vigia = asyncio.create_task(
+            _ws_vigilar_desconexion(websocket), name=f"logs-vigia-{container_id}"
+        )
+        try:
+            # O se acaban los logs, o el cliente cierra el socket.
+            await asyncio.wait({envio, vigia}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for tarea in (envio, vigia):
+                tarea.cancel()
+            await asyncio.gather(envio, vigia, return_exceptions=True)
+            await _cerrar_stream(stream)
     except WebSocketDisconnect:
         # Desconexión limpia del cliente web
         pass
@@ -95,6 +111,45 @@ async def container_logs_ws(
             await websocket.close()
         except Exception:
             pass
+
+
+async def _ws_enviar_logs(
+    websocket: WebSocket, stream: Any, timestamps: bool
+) -> None:
+    """Pasa el stream de logs de Docker al socket, línea a línea."""
+    async for line in stream:
+        entry = parse_docker_log_line(line, timestamps=timestamps)
+        await websocket.send_json(entry.model_dump())
+
+
+async def _ws_vigilar_desconexion(websocket: WebSocket) -> None:
+    """Se queda esperando a que el cliente cierre el socket.
+
+    Sin esto, un stream que no emite nada (contenedor parado, o simplemente
+    callado) no tiene ningún punto donde el handler pueda mirar si el cliente
+    sigue ahí. Es el vigía equivalente al de compose, pero sin canal de
+    cancelación: aquí el socket no manda mensajes, sólo se abre y se cierra.
+
+    Ojo al detalle: `receive()` de Starlette NO lanza `WebSocketDisconnect` como
+    sí hace `receive_text()`; devuelve el mensaje y marca el estado como
+    desconectado. Hay que mirar el tipo a mano, o el vigía se quedaría pidiendo
+    un segundo mensaje que no va a llegar.
+    """
+    while True:
+        mensaje = await websocket.receive()
+        if isinstance(mensaje, dict) and mensaje.get("type") == "websocket.disconnect":
+            return
+
+
+async def _cerrar_stream(stream: Any) -> None:
+    """Cierra el generador de aiodocker si lo es.
+
+    `follow=True` devuelve un generador asíncrono y `follow=False` una lista
+    ya materializada, así que el cierre sólo aplica al primero.
+    """
+    aclose = getattr(stream, "aclose", None)
+    if aclose is not None:
+        await aclose()
 
 
 @router.websocket("/containers/{container_id}/stats")
@@ -184,14 +239,17 @@ async def image_pull_ws(
         # El cliente canceló la descarga cerrando el socket
         pass
     except DockerError as e:
-        # Los errores del registro llegan como DockerError durante la iteración,
-        # no como DockerStreamError (aiodocker 0.27.0).
+        # Un rechazo del registro (repo inexistente, registro privado) llega con
+        # HTTP 200 y un chunk de error DENTRO del stream, que aiodocker levanta
+        # como `DockerStreamError`: esa clase fija `status=0` porque para la
+        # petición HTTP no hubo fallo. Usar `e.status` a pelo mandaba
+        # `{"type": "error", "code": 0}`, indistinguible del éxito.
         try:
             await websocket.send_json(
                 ImagePullMessage(
                     type="error",
                     image=image_ref,
-                    code=e.status,
+                    code=pull_error_code(e),
                     message=docker_error_message(e),
                 ).model_dump()
             )
@@ -356,6 +414,10 @@ async def container_terminal_ws(
         )
         for task in pending:
             task.cancel()
+        # Cancelar no es terminar: sin el `gather`, el `finally` de abajo cierra
+        # el stream y el socket mientras la otra tarea sigue a medio desenrollar.
+        # El canal de compose, doscientos líneas más abajo, sí hace este gather.
+        await asyncio.gather(*pending, return_exceptions=True)
     finally:
         try:
             await stream.close()
@@ -415,18 +477,19 @@ async def compose_accion_ws(
         await _ws_error(websocket, 404, f"Acción no soportada: '{action}'")
         return
 
-    # 2. La ruta, con el mismo criterio que SPEC-12: una relativa se resolvería
-    #    contra el directorio del backend, no contra el del usuario.
-    if not path.startswith("/"):
-        await _ws_error(
-            websocket,
-            400,
-            "La ruta debe ser absoluta. Una ruta relativa se resolvería contra "
-            "el directorio del servidor, no contra el tuyo.",
-        )
+    # 2. La ruta, con el mismo criterio que SPEC-12 y el mismo confinamiento que
+    #    el explorador (SPEC-14 §3.2). Una relativa se resolvería contra el
+    #    directorio del backend, no contra el del usuario; y una fuera de la raíz
+    #    no debe poder arrancar un proyecto desde un archivo que el selector de
+    #    ficheros no deja ni ver. El confinement va ANTES de `is_file()` para no
+    #    dar ni un stat fuera de la raíz.
+    try:
+        archivo = compose_service.resolver_ruta_explorador(path)
+    except HTTPException as error:
+        await _ws_error(websocket, error.status_code, str(error.detail))
         return
-    archivo = Path(path)
-    if not archivo.is_file():
+
+    if not await asyncio.to_thread(archivo.is_file):
         await _ws_error(websocket, 404, f"No existe el archivo: {path}")
         return
 
@@ -468,8 +531,11 @@ async def compose_accion_ws(
             return
 
     # Se comprueba el CLI antes de nada: mandar un `start` con los argumentos
-    # exactos de una acción que no va a ejecutarse sería mentir.
-    if not compose_cli.hay_cli():
+    # exactos de una acción que no va a ejecutarse sería mentir. `hay_cli()` es
+    # un `shutil.which` sobre seis directorios del PATH, y esto se ejecuta en
+    # CADA conexión de compose: si el PATH está en un sistema de ficheros de
+    # red, el `stat` bloqueaba el bucle de eventos para todo el worker.
+    if not await asyncio.to_thread(compose_cli.hay_cli):
         await _ws_error(
             websocket,
             503,
@@ -515,6 +581,12 @@ async def compose_accion_ws(
         )
     except WebSocketDisconnect:
         return
+    except ValueError as error:
+        # `argumentos_accion` sólo lanza por un `action` desconocido o por un
+        # nombre de servicio que se colaría como flag. Ninguno de los dos merece
+        # tocar el daemon.
+        await _ws_error(websocket, 400, str(error))
+        return
 
     consumidor = asyncio.create_task(
         _ws_bombear(websocket, generador, action),
@@ -535,6 +607,9 @@ async def compose_accion_ws(
         await asyncio.gather(consumidor, vigia, return_exceptions=True)
 
     codigo = resultado.codigo
+    # El timeout ya trae su propio código (124). Si se cayera aquí, el 504 de
+    # antes acabaría acompañado de un `exit -1`, y la UI marcaría la acción como
+    # cancelada aunque el usuario no haya cancelado nada.
     if resultado.cancelada or codigo is None:
         codigo = CODIGO_CANCELADO
 
@@ -582,16 +657,28 @@ async def _ws_vigilar_cancel(websocket: WebSocket, consumidor: asyncio.Task) -> 
     error sería "asynchronous generator is already running". Al cancelar la tarea
     el `GeneratorExit` salta dentro del generador y su `finally` mata el proceso.
     """
-    try:
-        while True:
+    while True:
+        try:
             mensaje = await websocket.receive_json()
-            if isinstance(mensaje, dict) and mensaje.get("type") == "cancel":
-                consumidor.cancel()
-                return
-    except WebSocketDisconnect:
-        # El cliente se fue: también hay que cortar.
-        consumidor.cancel()
-        raise
+        except WebSocketDisconnect:
+            # El cliente se fue: también hay que cortar.
+            consumidor.cancel()
+            raise
+        except (ValueError, TypeError, KeyError):
+            # `receive_json()` no tiene guarda: un frame de texto que no es JSON
+            # lanza `JSONDecodeError` (un `ValueError`); uno binario llega sin la
+            # clave `"text"`, y el `message["text"]` de Starlette es un `KeyError`;
+            # y un `None` sería un `TypeError`. Ninguno de los tres es un cierre,
+            # pero los tres mataban este vigía; el `finally` del handler cancelaba
+            # entonces la acción y `ejecutar_accion` la marcaba como cancelada, así
+            # que un error de protocolo se le comunicaba al usuario como "lo
+            # cancelaste tú". El frame raro se descarta y se sigue escuchando: una
+            # acción que ya está corriendo no se cae por basura en el canal.
+            continue
+
+        if isinstance(mensaje, dict) and mensaje.get("type") == "cancel":
+            consumidor.cancel()
+            return
 
 
 async def _ws_error(websocket: WebSocket, code: int, message: str) -> None:

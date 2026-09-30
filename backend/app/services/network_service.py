@@ -2,6 +2,7 @@
 import ipaddress
 import re
 from typing import Any
+from urllib.parse import quote
 
 import aiodocker
 from aiodocker.exceptions import DockerError
@@ -119,12 +120,19 @@ class NetworkService:
                 ),
             )
 
+        # `create_network` valida el nombre y esta ruta no lo hacía, así que el
+        # mismo campo se aceptaba aquí sin filtro. Con `force` el nombre se
+        # interpola en la URL cruda, y aiodocker no hace percent-encoding
+        # (`_canonicalize_url` es un f-string), de modo que un `../volumes/x`
+        # cambiaba de endpoint: `DELETE /v1.43/networks/../../volumes/x?force=true`.
+        _validate_name(name)
+
         try:
             if force:
                 # `DockerNetwork.delete()` no admite parámetros, así que el force
                 # solo se puede pedir por la vía cruda (SPEC-10 §3.6).
                 await docker._query_json(
-                    f"networks/{name}", method="DELETE", params={"force": "true"}
+                    f"networks/{quote(name, safe='')}", method="DELETE", params={"force": "true"}
                 )
             else:
                 network = await docker.networks.get(name)

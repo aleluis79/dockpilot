@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
-from aiodocker.exceptions import DockerError
+from aiodocker.exceptions import DockerError, DockerStreamError
 from httpx import ASGITransport, AsyncClient
 
 from app.core.docker import get_docker
@@ -29,7 +29,7 @@ class FakeExecStream:
         try:
             msg = await asyncio.wait_for(self._output_queue.get(), timeout=0.5)
             return msg
-        except (asyncio.TimeoutError, TimeoutError):
+        except TimeoutError:
             return None
 
     async def write_in(self, data: bytes):
@@ -53,7 +53,7 @@ class FakeExec:
         self.stream = FakeExecStream()
         self.resized_with = None
 
-    async def resize(self, h: int = None, w: int = None):
+    async def resize(self, h: int | None = None, w: int | None = None):
         self.resized_with = {"h": h, "w": w}
 
     def start(self, timeout=None, detach=False):
@@ -72,9 +72,9 @@ class FakeDockerContainer:
         image: str,
         status: str,
         state: str,
-        ports: list = None,
-        mounts: list = None,
-        networks: dict = None,
+        ports: list | None = None,
+        mounts: list | None = None,
+        networks: dict | None = None,
         labels: dict | None = None,
     ):
         self.id = cid
@@ -162,7 +162,15 @@ class FakeDockerContainer:
 
     async def delete(self, force=False, v=False):
         if self._status == "running" and not force:
-            raise DockerError(409, {"message": "You cannot remove a running container. Stop the container before attempting removal or force remove"})
+            raise DockerError(
+                409,
+                {
+                    "message": (
+                        "You cannot remove a running container. "
+                        "Stop the container before attempting removal or force remove"
+                    )
+                },
+            )
         return True
 
     def _raw_stats_payload(self):
@@ -349,7 +357,7 @@ class FakeDockerImages:
     def _resolve(self, name: str):
         if name in self.details:
             return self.details[name]
-        for ref, detail in self.details.items():
+        for _ref, detail in self.details.items():
             if name == detail["Id"] or (name and name in detail["RepoTags"]):
                 return detail
         return None
@@ -379,7 +387,12 @@ class FakeDockerImages:
         if in_use and not force:
             raise DockerError(
                 409,
-                {"message": f"conflict: unable to delete {name} (must be forced) - image is being used by running container"},
+                {
+                    "message": (
+                        f"conflict: unable to delete {name} (must be forced) - "
+                        "image is being used by running container"
+                    )
+                },
             )
         return [{"Untagged": detail["RepoTags"][1:]}] if len(detail["RepoTags"]) > 1 else []
 
@@ -417,11 +430,16 @@ class FakeDockerImages:
         # El error emerge durante la iteración, igual que con aiodocker real
         async def _stream():
             if base in self.unknown_refs:
-                raise DockerError(
-                    404,
-                    {
-                        "message": f"pull access denied for {base}, repository does not exist or may require 'docker login'"
-                    },
+                # Esto es lo que hace aiodocker 0.27 de verdad: el daemon
+                # responde 200 y mete el error como chunk del stream, así que
+                # lo que se levanta es `DockerStreamError` con `status=0` (para
+                # la petición HTTP no hubo fallo) y el código real en
+                # `error_detail`. Levantar `DockerError(404, ...)` era la forma
+                # de las versiones antiguas y enmascaraba el bug del `code: 0`.
+                raise DockerStreamError(
+                    f"pull access denied for {base}, "
+                    "repository does not exist or may require 'docker login'",
+                    error_detail={"code": 404},
                 )
             for event in self._progress_events(ref):
                 yield event
@@ -677,7 +695,7 @@ def mock_docker():
             return containers_db[cid]
         raise DockerError(404, {"message": f"No such container: {cid}"})
 
-    async def fake_create(config: dict, name: str = None):
+    async def fake_create(config: dict, name: str | None = None):
         c_name = f"/{name}" if name else f"/mock-{len(containers_db)+1}"
         for existing in containers_db.values():
             if existing._name == c_name:
@@ -707,7 +725,9 @@ def mock_docker():
     # Setup mock volumes repository (doble con semántica de aiodocker, SPEC-08)
     fake_volumes = FakeDockerVolumes()
 
-    async def fake_query_json(endpoint: str, method: str = "GET", params: dict = None):
+    async def fake_query_json(
+        endpoint: str, method: str = "GET", params: dict | None = None
+    ):
         if endpoint == "images/search":
             term = (params or {}).get("term", "")
             return [
@@ -722,7 +742,17 @@ def mock_docker():
                 "Containers": [],
                 "Volumes": [],
                 "BuildCache": [],
-                "BuildCacheUsage": 123456789,
+                # El daemon devuelve este bloque como OBJETO (`TotalCount`,
+                # `ActiveCount`, `TotalSize`, `Reclaimable`, `Items`), igual que
+                # los demás `<X>Usage`. Poner aquí un entero fue lo que dejó
+                # `build_cache_size` en 0 sin que ningún test se enterase.
+                "BuildCacheUsage": {
+                    "TotalCount": 3,
+                    "ActiveCount": 1,
+                    "TotalSize": 123456789,
+                    "Reclaimable": 98765432,
+                    "Items": [],
+                },
                 "ImageUsage": {
                     "TotalCount": 2,
                     "ActiveCount": 1,
@@ -1202,12 +1232,21 @@ async def plan_client(mock_docker):
 
 
 @pytest.fixture
-def archivo(tmp_path):
-    """Un compose válido en disco.
+def archivo(tmp_path, monkeypatch):
+    """Un compose válido en disco, dentro de la raíz del explorador.
 
     Las rutas se validan **antes** de contactar con el CLI, así que cualquier test
     que vaya al comando necesita un archivo real. Lo comparten SPEC-12 y SPEC-13.
+
+    Se ancla `COMPOSE_BROWSE_ROOT` a `tmp_path` porque las rutas de estos specs
+    pasan por el mismo confinamiento que el explorador (SPEC-14 §3.2): sin esto,
+    un archivo de `/tmp/pytest-...` quedaba fuera de la raíz y el endpoint
+    respondía 403 antes de llegar al CLI.
     """
+    from app.core import config
+
+    monkeypatch.setattr(config.settings, "COMPOSE_BROWSE_ROOT", str(tmp_path))
+
     ruta = tmp_path / "docker-compose.yml"
     ruta.write_text("services:\n  web:\n    image: nginx:1.27\n")
     return ruta

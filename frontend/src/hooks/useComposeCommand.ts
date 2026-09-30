@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { wsUrl } from '../services/wsUrl'
+import { acumular } from '../utils/buffer'
 import type { ComposeAction, ComposeCommandParams, ComposeMessage } from '../types/compose'
 
 export interface LineaCompose {
@@ -11,7 +12,16 @@ export interface LineaCompose {
 interface UseComposeCommandOptions {
   /** Refresca el inventario de proyectos: lo que se acaba de cambiar. */
   onRefrescar?: () => void
+  /**
+   * Fragmentos conservados. Un `logs --follow` abierto toda la sesión no puede
+   * acumular sin techo: el visor re-deriva todas las líneas en cada fragmento,
+   * así que sin tope el coste crecía con el cuadrado del historial.
+   */
+  maxChunks?: number
 }
+
+/** Tope por defecto: 5000 fragmentos bastan de sobra para leer una acción. */
+const MAX_CHUNKS = 5000
 
 /** Acciones cuyo éxito deja obsoleto el inventario de SPEC-11. */
 const INVALIDAN_INVENTARIO: ReadonlySet<ComposeAction> = new Set<ComposeAction>([
@@ -29,7 +39,10 @@ const INVALIDAN_INVENTARIO: ReadonlySet<ComposeAction> = new Set<ComposeAction>(
  * backend el que tiene que matar al de compose, y el usuario necesita saber
  * cuándo lo ha conseguido.
  */
-export function useComposeCommand({ onRefrescar }: UseComposeCommandOptions = {}) {
+export function useComposeCommand({
+  onRefrescar,
+  maxChunks = MAX_CHUNKS,
+}: UseComposeCommandOptions = {}) {
   const [output, setOutput] = useState<LineaCompose[]>([])
   const [command, setCommand] = useState<string[]>([])
   const [enCurso, setEnCurso] = useState<boolean>(false)
@@ -120,7 +133,9 @@ export function useComposeCommand({ onRefrescar }: UseComposeCommandOptions = {}
             setCommand(mensaje.command)
             break
           case 'output':
-            setOutput((previas) => [...previas, { stream: mensaje.stream, data: mensaje.data }])
+            setOutput((previas) =>
+              acumular(previas, { stream: mensaje.stream, data: mensaje.data }, maxChunks)
+            )
             break
           case 'exit': {
             setEnCurso(false)
@@ -154,7 +169,7 @@ export function useComposeCommand({ onRefrescar }: UseComposeCommandOptions = {}
         setEnCurso(false)
       }
     },
-    [cerrar]
+    [cerrar, maxChunks]
   )
 
   const cancelar = useCallback(() => {

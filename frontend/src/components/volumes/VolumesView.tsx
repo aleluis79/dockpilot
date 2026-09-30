@@ -22,6 +22,16 @@ const FILTERS: ReadonlyArray<{ key: Filter; label: string }> = [
   { key: 'anonymous', label: 'Anónimos' },
 ]
 
+/**
+ * Si se conoce el uso del volumen.
+ *
+ * Sólo el `false` explícito significa "el daemon no dijo nada": la ausencia del
+ * campo es una respuesta vieja, que sí traía el `ref_count` de verdad. Confundir
+ * ambas cosas dejaría fuera de «En uso» y «No usados» todo volumen vindo de una
+ * versión anterior.
+ */
+const esUsoConocido = (volume: VolumeSummary): boolean => volume.usage_known !== false
+
 export const VolumesView = ({ onDeleted }: VolumesViewProps) => {
   const [volumes, setVolumes] = useState<VolumeSummary[]>([])
   const [loading, setLoading] = useState<boolean>(true)
@@ -93,8 +103,10 @@ export const VolumesView = ({ onDeleted }: VolumesViewProps) => {
     return volumes.filter((volume) => {
       const matchesTerm = !term || volume.name.toLowerCase().includes(term)
       if (!matchesTerm) return false
-      if (filter === 'in-use') return volume.ref_count > 0
-      if (filter === 'unused') return volume.ref_count === 0
+      if (filter === 'in-use') return esUsoConocido(volume) && volume.ref_count > 0
+      // Sin dato de uso, un volumen no entra en «sin usar»: incluirlo afirmaría
+      // que se puede borrar cuando nadie lo ha comprobado.
+      if (filter === 'unused') return esUsoConocido(volume) && volume.ref_count === 0
       if (filter === 'anonymous') return volume.is_anonymous
       return true
     })
@@ -209,9 +221,9 @@ export const VolumesView = ({ onDeleted }: VolumesViewProps) => {
           const active = filter === option.key
           const count =
             option.key === 'in-use'
-              ? volumes.filter((v) => v.ref_count > 0).length
+              ? volumes.filter((v) => esUsoConocido(v) && v.ref_count > 0).length
               : option.key === 'unused'
-                ? volumes.filter((v) => v.ref_count === 0).length
+                ? volumes.filter((v) => esUsoConocido(v) && v.ref_count === 0).length
                 : option.key === 'anonymous'
                   ? anonymousCount
                   : volumes.length
@@ -405,13 +417,18 @@ const DeleteVolumeDialog = ({ volume, onClose, onConfirm }: DeleteVolumeDialogPr
           )}
         </div>
 
-        {volume.ref_count > 0 && (
+        {!esUsoConocido(volume) ? (
+          <div className="p-3 mb-4 bg-inset border border-default rounded-xl text-xs text-fg-muted">
+            El daemon no informó del uso de este volumen. No se puede afirmar que
+            esté libre, así que se trata como ocupado.
+          </div>
+        ) : volume.ref_count > 0 ? (
           <div className="p-3 mb-4 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-700 dark:text-amber-300">
             {volume.ref_count}{' '}
             {volume.ref_count === 1 ? 'contenedor lo está usando' : 'contenedores lo están usando'}.
             Para eliminarlo debes marcar la eliminación forzada.
           </div>
-        )}
+        ) : null}
 
         <label className="flex items-center gap-2 mb-6 cursor-pointer select-none">
           <input

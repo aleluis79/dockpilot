@@ -2,6 +2,7 @@
 """Gestión de volúmenes: listado, detalle, borrado y limpieza (SPEC-08)."""
 
 import pytest
+from aiodocker.exceptions import DockerError
 from httpx import AsyncClient
 
 from tests.fake_volumes import ANON_A
@@ -208,3 +209,89 @@ async def test_prune_reports_reclaimed_bytes(async_client: AsyncClient):
     # temporal (5 MiB) + anónimo (48505107) = 53747987
     assert data["bytes_reclaimed"] == 53747987
     assert "message" in data
+
+
+# --- "No lo sé" no es "está libre" ---------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_el_detalle_informa_de_si_conoce_el_uso(async_client: AsyncClient, mock_docker):
+    """Con el daemon sano, `usage_known` va a True y el ref_count es real."""
+    response = await async_client.get("/api/v1/volumes/datos-app")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["usage_known"] is True
+    assert data["ref_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_sin_system_df_el_listado_no_afirma_que_estan_libres(async_client: AsyncClient, mock_docker):
+    """Si no se puede leer `/system/df`, el inventario lo dice en vez de mentir.
+
+    Antes `ref_count` salía a 0 para todos los volúmenes, y el filtro «Sin
+    usados» y el contador los trataban como eliminables.
+    """
+    original = mock_docker._query_json
+
+    async def sin_df(endpoint, method="GET", params=None):
+        if endpoint == "system/df":
+            raise DockerError(500, {"message": "boom"})
+        return await original(endpoint, method, params)
+
+    mock_docker._query_json = sin_df
+
+    response = await async_client.get("/api/v1/volumes")
+    assert response.status_code == 200
+    volumes = response.json()
+
+    assert volumes, "el inventario sigue siendo válido, solo sin datos de uso"
+    assert all(v["usage_known"] is False for v in volumes)
+
+
+@pytest.mark.asyncio
+async def test_el_prune_no_promete_una_lista_que_no_puede_conocer(async_client: AsyncClient, mock_docker):
+    """El diálogo de "¿qué voy a borrar?" no puede(listar de más).
+
+    `count_unused` contestaba `count: N` con todos los volúmenes del host,
+    incluidos los que montan contenedores vivos, porque no pudo leer `/system/df`.
+    """
+    original = mock_docker._query_json
+
+    async def sin_df(endpoint, method="GET", params=None):
+        if endpoint == "system/df":
+            raise DockerError(500, {"message": "boom"})
+        return await original(endpoint, method, params)
+
+    mock_docker._query_json = sin_df
+
+    response = await async_client.get("/api/v1/volumes/prune")
+
+    assert response.status_code == 503
+    assert "names" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_el_prune_sigue_funcionando_con_el_daemon_sano(async_client: AsyncClient, mock_docker):
+    """El camino feliz del diálogo de limpieza no cambia."""
+    response = await async_client.get("/api/v1/volumes/prune")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["count"] >= 0
+    assert isinstance(data["names"], list)
+
+
+@pytest.mark.asyncio
+async def test_el_detalle_dice_el_proyecto_compose_igual_que_el_listado(async_client: AsyncClient, mock_docker):
+    """El listado devolvía el proyecto y el detalle no: el mismo volumen salía
+    con proyecto en la tabla y sin proyecto al abrirlo."""
+    listado = await async_client.get("/api/v1/volumes")
+    en_listado = {v["name"]: v["compose_project"] for v in listado.json()}
+
+    for nombre, proyecto in en_listado.items():
+        detalle = await async_client.get(f"/api/v1/volumes/{nombre}")
+        assert detalle.status_code == 200
+        assert detalle.json()["compose_project"] == proyecto, (
+            f"el detalle de {nombre} no cuadra con el listado"
+        )

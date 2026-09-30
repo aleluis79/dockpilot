@@ -157,6 +157,14 @@ export const TerminalViewer: React.FC<TerminalViewerProps> = ({
       window.removeEventListener('resize', handleResize)
       resizeObserver?.disconnect()
       dataDisposable.dispose()
+      // Los handlers se sueltan ANTES de cerrar el socket. `close()` dispara
+      // `onclose` de forma asíncrona, así que sin esto el `onclose` escribía en
+      // un Terminal ya dispose() y notificaba 'disconnected' a un padre que ya
+      // no lo esperaba. Es lo mismo que hace `useDockerStats` en su limpieza.
+      ws.onmessage = null
+      ws.onopen = null
+      ws.onerror = null
+      ws.onclose = null
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close()
       }

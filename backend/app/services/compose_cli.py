@@ -69,6 +69,15 @@ ENV_NAMES_TO_DROP = frozenset(
         "DOCKER_CONTEXT",
         "DOCKER_TLS_VERIFY",
         "DOCKER_CERT_PATH",
+        # Estas también dirigen el CLI a otro sitio: si sobreviven, el
+        # `docker compose` del panel puede negociar una versión de API distinta
+        # de la que usa aiodocker, o usar otro builder, y entonces la operación
+        # que se ve en la UI no es la que ejecuta el host.
+        "DOCKER_API_VERSION",
+        "DOCKER_BUILDKIT",
+        "DOCKER_CLI_HINTS",
+        "DOCKER_CONTENT_TRUST",
+        "BUILDKIT_PROGRESS",
     }
 )
 
@@ -79,6 +88,13 @@ class ComposeCliAusente(Exception):
 
 class ComposeCliTimeout(Exception):
     """El CLI no terminó dentro del tiempo previsto. El proceso ya está muerto."""
+
+
+# Código de salida con el que se reporta un timeout. 124 es el de `timeout(1)` en
+# coreutils, y es un valor que el proceso real nunca devuelve: la UI usa -1 para
+# "lo paró el usuario", así que si el timeout saliera con -1 se mostraría como
+# una cancelación que el usuario no hizo (además del error 504 de antes).
+CODIGO_TIMEOUT = 124
 
 
 class ComposeCliFallo(Exception):
@@ -276,6 +292,11 @@ TIMEOUT_POR_DEFECTO_S = 60.0
 # porque compose v2 no tiene `--service` (SPEC-13 §3.1).
 ACCIONES_CON_SERVICIO = frozenset({"logs", "pull", "stop"})
 
+# Nombres de servicio de compose: lo que pone el usuario en el `docker-compose.yml`
+# bajo cada clave. Al ir como argumento posicional, un `-` inicial lo convertiría
+# en flag, así que se exige el mismo patrón que usa compose.
+SERVICE_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+
 # Secuencias de escape ANSI. Sin TTY compose no colorea, pero si el `PATH` o la
 # versión del CLI cambian eso, el panel acabaría pintando escapes dentro de un
 # `<pre>`. Es una red de seguridad, no una necesidad observada.
@@ -319,7 +340,20 @@ def hay_cli() -> bool:
     return shutil.which("docker", path=KNOWN_PATH) is not None
 
 
-def timeout_de(action: str) -> float:
+def timeout_de(action: str, follow: bool = True) -> float:
+    """Plazo de la acción, o `None` si no debe llevar reloj.
+
+    `logs --follow` es un stream sin fin por definición: no termina cuando el
+    contenedor para, y el usuario lo deja abierto mientras trabaja. Si se le
+    aplica el plazo de 60 s, `asyncio.timeout` mata el proceso y el cliente
+    recibe un `504` seguido de `exit -1` aunque nada haya fallado. Por eso un
+    `follow` no lleva reloj: lo que lo detiene es el cliente, que cancela la
+    conexión WebSocket, y ese camino sí mata el proceso en el `finally`.
+
+    `logs` sin `follow` sí tiene fin, así que conserva su plazo.
+    """
+    if action == "logs" and follow:
+        return None
     return TIMEOUTS_S.get(action, TIMEOUT_POR_DEFECTO_S)
 
 
@@ -372,6 +406,12 @@ def argumentos_accion(
     # El servicio va POSICIONAL al final. Compose v2 no tiene `--service`
     # (`unknown flag: --service`), y ponerlo haría fallar la acción.
     if service and action in ACCIONES_CON_SERVICIO:
+        # Un servicio sin validar acaba siendo un flag: `service="--tail=99999"`
+        # se añade tal cual y compose lo lee como opción, no como nombre. No es
+        # inyección de shell (`shell=False`, argv), pero sí inyección de
+        # argumentos en un comando que para, borra o descarga cosas.
+        if not SERVICE_PATTERN.match(service):
+            raise ValueError(f"Nombre de servicio no válido: {service!r}")
         args.append(service)
 
     return args
@@ -455,7 +495,9 @@ async def ejecutar_accion(
         # `asyncio.timeout` funciona dentro de un generador asíncrono y el `finally`
         # sigue ejecutándose al expirar, que es justo lo que hace falta: el
         # proceso tiene que morir también cuando lo mata el reloj.
-        async with asyncio.timeout(timeout_de(action)):
+        # `asyncio.timeout(None)` no arma ningún reloj: es la forma de dejar la
+        # acción sin plazo, que es lo que necesita un `logs --follow`.
+        async with asyncio.timeout(timeout_de(action, follow)):
             while pendientes:
                 item = await cola.get()
                 if item is None:
@@ -464,6 +506,12 @@ async def ejecutar_accion(
                 yield item
             resultado.codigo = await proceso.wait()
     except TimeoutError:
+        # El código se fija ANTES de lanzar, porque el `finally` del generador y el
+        # `cancelada = True` de más abajo son caminos distintos: sin esto,
+        # `codigo` se quedaba en `None` y quien lo leyera lo traducía a
+        # "cancelado por el usuario".
+        resultado.codigo = CODIGO_TIMEOUT
+        resultado.cancelada = False
         raise ComposeCliTimeout(
             f"La acción '{action}' superó su tiempo y se detuvo."
         ) from None

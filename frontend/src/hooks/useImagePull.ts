@@ -137,6 +137,24 @@ export function useImagePull(
       setError('Error en la conexión WebSocket de descarga')
     }
 
+    ws.onclose = (event) => {
+      if (!isMounted) return
+      // Sin esto, cualquier cierre (1006 de una caída de red, 1011 si el backend
+      // reinicia) dejaba `status` en 'pulling' para siempre: el modal seguía
+      // con el spinner, el pie decía «cerrar cancela la descarga» y no se
+      // reportaba ningún error, aunque la descarga ya hubiera muerto.
+      // Un cierre limpio (1000) tras un 'done' o un 'error' ya pone el estado
+      // final, así que aquí sólo se actúa si la descarga seguía en curso.
+      setStatus((previo) => {
+        if (previo === 'pulling') {
+          setError(`Se perdió la conexión con el backend (código ${event.code})`)
+          setErrorCode(null)
+          return 'error'
+        }
+        return previo
+      })
+    }
+
     return () => {
       isMounted = false
       const socket = wsRef.current
@@ -144,6 +162,7 @@ export function useImagePull(
       if (socket) {
         socket.onmessage = null
         socket.onerror = null
+        socket.onclose = null
         socket.close()
       }
     }

@@ -261,13 +261,16 @@ docker compose --profile '*' -f <ruta> [-p <proyecto>] config --format json
 
 | Método | Endpoint | Cuerpo | Respuesta | Errores |
 | :--- | :--- | :--- | :--- | :--- |
-| `POST` | `/api/v1/compose/plan` | `ComposePlanRequest` | `200 OK` (`ComposePlan`) | `400` ruta no absoluta o inválida, `404` archivo inexistente, `413` demasiado grande, `422` compose no pudo validar el archivo, `503` CLI ausente, `504` compose no terminó a tiempo |
+| `POST` | `/api/v1/compose/plan` | `ComposePlanRequest` | `200 OK` (`ComposePlan`) | `400` ruta no absoluta o inválida, `403` ruta fuera de la raíz del explorador, `404` archivo inexistente, `413` demasiado grande, `422` compose no pudo validar el archivo, `503` CLI ausente, `504` compose no terminó a tiempo |
 
 Es `POST` y no `GET` por dos razones: lleva un cuerpo, y la ruta es un parámetro de entrada que no pertenece en una query ni en un log de acceso.
 
 - **Timeout de 10 segundos.** `config` es una operación local de resolución de texto; si tarda más, algo está mal (un `include:` remoto, un contexto colgado) y cortar es mejor que esperar. `asyncio.wait_for` y, al expirar, `proc.kill()` seguido de `await proc.wait()` para no dejar el proceso colgado.
 - **`503` si el CLI no está.** `FileNotFoundError` al spawn significa que no hay `docker` en el `PATH` o no hay plugin compose. El mensaje lo dice explícitamente en vez de fingir que el archivo está mal.
 - **`400` si la ruta no es absoluta.** Se rechaza antes de tocar el sistema de archivos: una ruta relativa se resolvería contra el directorio de trabajo del backend, que no es el del usuario, y el error aparecería más tarde y más confuso.
+- **`403` si la ruta sale de la raíz del explorador**, y se comprueba **antes** que exista. El criterio es el de SPEC-14 §3.2 —`resolve()` y `parents`, no `startswith`— y se comparte con el explorador y con el canal de ciclo de vida: los tres endpoints que aceptan una ruta del cliente aplican la misma regla.
+
+  Este `403` no es decorativo para este endpoint en concreto, y la razón es que **el plan escribe**. Con `content`, §3.4 vuelca lo que mandó el cliente en un temporal junto al archivo original; sin confinamiento, un `path=/etc/docker-compose.yml` con contenido，escribía en `/etc`. Por eso la comprobación va antes de `exists()`, `is_file()` y `stat()`: ni un solo `stat` fuera de la raíz.
 - **`413` a partir de 1 MiB** de archivo, o del `content` enviado.
 
 ### 3.6 Obligaciones que introduce ejecutar un proceso
@@ -373,12 +376,25 @@ Característica: Lectura y previsualización de archivos Docker Compose
     Cuando el usuario pide el plan
     Entonces el sistema responde con código 404
     Y el cuerpo de la respuesta contiene un mensaje de error descriptivo
+    Y la ruta indicada estaba dentro de la raíz del explorador
 
   Escenario: Ruta relativa rechazada
     Dado que la ruta indicada no es absoluta
     Cuando el usuario pide el plan
     Entonces el sistema responde con código 400
     Y el sistema no ha intentado leer ningún archivo
+
+  Escenario: Ruta fuera de la raíz del explorador
+    Dado que la ruta indicada sale de la raíz del explorador
+    Y que el archivo existe y es un compose válido
+    Cuando el usuario pide el plan con un contenido editado
+    Entonces el sistema responde con código 403
+    Y el sistema no ha escrito ningún temporal junto a ese archivo
+    Y el archivo original conserva su contenido
+
+    El 403 va antes de comprobar que el archivo exista, y por eso un archivo
+    inexistente fuera de la raíz también da 403 y no 404: distinguirlos serviría
+    para enumerar el disco (SPEC-14 §3.2).
 
   Escenario: Archivo demasiado grande
     Dado que el archivo supera el tamaño máximo admitido
@@ -421,7 +437,9 @@ Característica: Lectura y previsualización de archivos Docker Compose
   - `test_warnings_con_codigo_de_salida_cero`: `stderr` con `level=warning` y salida `0` → `warnings` poblado, código 200.
   - `test_error_de_validacion_con_codigo_distinto_de_cero`: salida `1` → 422 con el stderr de compose y sin plan.
   - `test_ruta_no_absoluta_devuelve_400`: se rechaza antes de leer el sistema de archivos.
-  - `test_archivo_inexistente_devuelve_404`.
+  - `test_archivo_inexistente_devuelve_404`: con la ruta **dentro** de la raíz del explorador (`tmp_path`), porque fuera da 403 antes.
+  - `test_una_ruta_fuera_de_la_raiz_da_403`: ni el CLI se lanza.
+  - `test_el_contenido_editado_no_se_escribe_fuera_de_la_raiz`: con `content`, el archivo de fuera conserva su contenido y no aparece ningún temporal.
   - `test_archivo_demasiado_grande_devuelve_413`.
   - `test_cli_ausente_devuelve_503`: `FileNotFoundError` del spawn.
   - `test_timeout_devuelve_504_y_termina_el_proceso`: el proceso queda terminado, no colgado.

@@ -70,6 +70,13 @@ export function ComposeLogsViewer({
   const [filtroServicio, setFiltroServicio] = useState<string>('all')
   const [autoScroll, setAutoScroll] = useState<boolean>(true)
   const [copiado, setCopiado] = useState<boolean>(false)
+  const copiadoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copiadoTimerRef.current) clearTimeout(copiadoTimerRef.current)
+    }
+  }, [])
   /* Cuántas líneas se han descartado con "limpiar". Un contador y no un
      `slice` sobre las propias líneas, para que las que lleguen después no
      revivan lo borrado. */
@@ -111,7 +118,10 @@ export function ComposeLogsViewer({
     try {
       await navigator.clipboard.writeText(visibles.map((l) => l.texto).join('\n'))
       setCopiado(true)
-      setTimeout(() => setCopiado(false), 1500)
+      // Se cancela el temporizador anterior en vez de apilarlos: sin esto, cada
+      // clic extraía un temporizador más y todos disparaban a la vez.
+      if (copiadoTimerRef.current) clearTimeout(copiadoTimerRef.current)
+      copiadoTimerRef.current = setTimeout(() => setCopiado(false), 1500)
     } catch {
       // El portapapeles puede estar bloqueado: no es un fallo que merezca un
       // cartel en un visor de logs.

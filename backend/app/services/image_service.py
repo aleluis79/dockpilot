@@ -9,7 +9,7 @@ import aiodocker
 from aiodocker.exceptions import DockerError
 from fastapi import HTTPException
 
-from app.core.docker import docker_error_message
+from app.core.docker import docker_error_message, docker_error_status
 from app.schemas.image import (
     ImageDeleteResponse,
     ImageDetail,
@@ -76,6 +76,47 @@ def normalize_image_ref(ref: str) -> str:
 
 def _short_id(image_id: str) -> str:
     return image_id[:19] if len(image_id) > 19 else image_id
+
+
+def pull_error_code(error: object) -> int:
+    """Código HTTP con el que describir un fallo de descarga.
+
+    El fallo típico de un pull (repo inexistente, registro privado) llega con
+    HTTP 200 y un chunk `{"error": ...}` dentro del stream, que aiodocker levanta
+    como `DockerStreamError`: esa clase fija `status=0` porque, para la petición
+    HTTP, no hubo fallo ninguno. Tal cual, el frontend recibía
+    `{"type": "error", "code": 0}`, y un 0 en un campo con forma de código HTTP
+    es indistinguible del éxito.
+
+    El código real vive en `error_detail["code"]`. Si no está, se deduce del
+    texto, y si tampoco se puede, 502: el registro es un servicio externo y la
+    petición sí llegó, así que el fallo no es del panel.
+    """
+    status = getattr(error, "status", 0)
+    if isinstance(status, int) and not isinstance(status, bool) and 400 <= status < 600:
+        # El daemon respondió con un código HTTP de verdad (404, 409, 500...).
+        return status
+    if status == 900:
+        # El 900 de aiodocker significa "no pude hablar con el daemon": eso es
+        # un 503 de toda la vida, no un fallo del registro.
+        return 503
+
+    detalle = getattr(error, "error_detail", None)
+    if isinstance(detalle, dict):
+        codigo = detalle.get("code")
+        if isinstance(codigo, int) and not isinstance(codigo, bool) and 400 <= codigo < 600:
+            return codigo
+
+    texto = docker_error_message(error).lower()
+    if "denied" in texto or "unauthorized" in texto or "authentication" in texto:
+        return 403
+    if "not found" in texto or "does not exist" in texto or "manifest unknown" in texto:
+        return 404
+    if "too many requests" in texto or "toomanyrequests" in texto or "rate limit" in texto:
+        return 429
+    if "no space left" in texto or "disk" in texto:
+        return 507
+    return 502
 
 
 def _get_image_dict(img: Any) -> dict:
@@ -178,7 +219,7 @@ class ImageService:
             if e.status == 404:
                 raise HTTPException(status_code=404, detail=f"Imagen {image_id} no encontrada") from e
             raise HTTPException(
-                status_code=e.status, detail=docker_error_message(e)
+                status_code=docker_error_status(e), detail=docker_error_message(e)
             ) from e
         except Exception as e:
             raise HTTPException(
@@ -244,7 +285,7 @@ class ImageService:
                     ),
                 ) from e
             raise HTTPException(
-                status_code=e.status, detail=docker_error_message(e)
+                status_code=docker_error_status(e), detail=docker_error_message(e)
             ) from e
         except Exception as e:
             raise HTTPException(

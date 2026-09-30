@@ -166,3 +166,78 @@ describe('useImagePull', () => {
     expect(MockWebSocket.instances).toHaveLength(1)
   })
 })
+
+// --- La conexión se cae a mitad de la descarga ---------------------------------
+
+describe('useImagePull cuando se pierde la conexión', () => {
+  const originalWebSocket = global.WebSocket
+
+  beforeEach(() => {
+    MockWebSocket.instances = []
+    // @ts-expect-error Mocking WebSocket
+    global.WebSocket = MockWebSocket
+  })
+
+  afterEach(() => {
+    global.WebSocket = originalWebSocket
+  })
+
+  const cerrar = (codigo: number) =>
+    act(() => {
+      MockWebSocket.instances[0].onclose?.({ code: codigo })
+    })
+
+  it('no se queda en "descargando" para siempre', () => {
+    const { result } = renderHook(() => useImagePull('alpine:3.20'))
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.()
+      MockWebSocket.instances[0].emit(layerMessage('Downloading'))
+    })
+    expect(result.current.status).toBe('pulling')
+
+    // Sin `onclose`, un 1006 (caída de red) o un 1011 (backend que reinicia)
+    // dejaban `status` en 'pulling': el modal seguía con el spinner, el pie
+    // decía «cerrar cancela la descarga» y no se reportaba ningún error.
+    cerrar(1006)
+
+    expect(result.current.status).toBe('error')
+    expect(result.current.error).toMatch(/1006/)
+  })
+
+  it('no pisa el resultado si la descarga ya había terminado bien', () => {
+    const onComplete = vi.fn()
+    const { result } = renderHook(() => useImagePull('alpine:3.20', { onComplete }))
+
+    act(() => {
+      MockWebSocket.instances[0].onopen?.()
+      MockWebSocket.instances[0].emit({ type: 'done', image: 'alpine:3.20', tags: ['alpine:3.20'] })
+    })
+    expect(result.current.status).toBe('success')
+
+    // El backend cierra con 1000 después del `done`; eso es el final normal.
+    cerrar(1000)
+
+    expect(result.current.status).toBe('success')
+    expect(result.current.error).toBeNull()
+  })
+
+  it('no pisa un error que el backend ya había mandado', () => {
+    const { result } = renderHook(() => useImagePull('no-existe-este-repo'))
+
+    act(() => {
+      MockWebSocket.instances[0].emit({
+        type: 'error',
+        image: 'no-existe-este-repo',
+        code: 404,
+        message: 'pull access denied',
+      })
+    })
+    expect(result.current.status).toBe('error')
+
+    cerrar(1000)
+
+    expect(result.current.status).toBe('error')
+    expect(result.current.error).toBe('pull access denied')
+  })
+})

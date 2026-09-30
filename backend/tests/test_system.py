@@ -165,6 +165,48 @@ async def test_system_df_tolera_bloques_ausentes(async_client: AsyncClient, mock
     assert usage["build_cache_size"] == 0
 
 
+@pytest.mark.asyncio
+async def test_build_cache_size_lee_el_bloque(async_client: AsyncClient, mock_docker):
+    """`BuildCacheUsage` es un bloque, no un entero.
+
+    El daemon devuelve `{TotalCount, ActiveCount, TotalSize, Reclaimable, Items}`
+    igual que los demás `<X>Usage`. Pasarlo tal cual a `_as_int` daba 0 siempre,
+    que es indistinguible de "este host no tiene caché de build".
+    """
+    response = await async_client.get("/api/v1/system/df")
+    assert response.status_code == 200
+
+    assert response.json()["build_cache_size"] == 123456789
+
+
+@pytest.mark.asyncio
+async def test_build_cache_size_tolera_formas_rareñas(async_client: AsyncClient, mock_docker):
+    """Un daemon raro no puede convertir la respuesta en un 500."""
+    original = mock_docker._query_json
+
+    async def df_con_formas(endpoint, method="GET", params=None):
+        data = await original(endpoint, method, params)
+        if endpoint == "system/df":
+            data["BuildCacheUsage"] = None
+        return data
+
+    mock_docker._query_json = df_con_formas
+    response = await async_client.get("/api/v1/system/df")
+    assert response.status_code == 200
+    assert response.json()["build_cache_size"] == 0
+
+    async def df_con_texto(endpoint, method="GET", params=None):
+        data = await original(endpoint, method, params)
+        if endpoint == "system/df":
+            data["BuildCacheUsage"] = {"TotalSize": "4096"}
+        return data
+
+    mock_docker._query_json = df_con_texto
+    response = await async_client.get("/api/v1/system/df")
+    assert response.status_code == 200
+    assert response.json()["build_cache_size"] == 4096
+
+
 async def test_system_info_reporta_error_del_daemon(async_client: AsyncClient, mock_docker):
     """Un fallo del daemon se traduce a 503 con un mensaje legible."""
     from aiodocker.exceptions import DockerError
@@ -211,7 +253,10 @@ async def test_system_overview_resuelve_nombres_de_imagen_por_id(
             # Se quitan los nombres que el doble si traia, como en el daemon real.
             # El primero se resuelve por su etiqueta real; el segundo apunta a una
             # imagen que solo tiene "<none>:<none>" y debe caer al Id corto.
-            for item, image_id in zip(items, ["sha256:img1", "sha256:img3"]):
+            # `strict=True` a propósito: si el doble añadiera una tercera imagen, el
+            # `zip` la dejaría sin renombrar en silencio y el test seguiría
+            # pasando sin comprobar nada de ella.
+            for item, image_id in zip(items, ["sha256:img1", "sha256:img3"], strict=True):
                 item.pop("Names", None)
                 item["Id"] = image_id
         return data

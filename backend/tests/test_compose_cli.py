@@ -238,3 +238,45 @@ async def test_los_bytes_invalidos_no_tumban_la_respuesta(fake_spawn):
     resultado = await ejecutar_config(ARCHIVO)
 
     assert "tienda" in resultado.stdout
+
+
+async def test_limpia_las_variables_que_redirigen_el_cli(fake_spawn, monkeypatch):
+    """También las que cambian CON QUÉ API habla el CLI, no solo a qué daemon.
+
+    `DOCKER_HOST` ya estaba en la lista, pero `DOCKER_API_VERSION` no: si
+    sobrevivía, el `docker compose` del panel negociaba una versión de API
+    distinta de la que usa aiodocker, y el `up` que se ve en la UI no era
+    exactamente el `up` que ejecuta el host.
+    """
+    monkeypatch.setenv("DOCKER_API_VERSION", "1.24")
+    monkeypatch.setenv("DOCKER_BUILDKIT", "0")
+    monkeypatch.setenv("DOCKER_CONTENT_TRUST", "1")
+    monkeypatch.setenv("BUILDKIT_PROGRESS", "plain")
+    monkeypatch.setenv("DOCKER_CLI_HINTS", "false")
+    fake_spawn.devolver(stdout=b"{}")
+
+    await ejecutar_config(ARCHIVO)
+
+    env = fake_spawn.ultima.env
+    for variable in (
+        "DOCKER_API_VERSION",
+        "DOCKER_BUILDKIT",
+        "DOCKER_CONTENT_TRUST",
+        "BUILDKIT_PROGRESS",
+        "DOCKER_CLI_HINTS",
+    ):
+        assert variable not in env, f"{variable} llegó al proceso hijo"
+    assert "1.24" not in env.values()
+
+
+async def test_lo_que_no_es_de_docker_sobrevive_al_hijo(fake_spawn, monkeypatch):
+    """La limpieza no puede comerse el entorno que el CLI sí necesita."""
+    monkeypatch.setenv("HOME", "/home/usuario")
+    monkeypatch.setenv("LANG", "es_ES.UTF-8")
+    fake_spawn.devolver(stdout=b"{}")
+
+    await ejecutar_config(ARCHIVO)
+
+    env = fake_spawn.ultima.env
+    assert env["HOME"] == "/home/usuario"
+    assert env["LANG"] == "es_ES.UTF-8"

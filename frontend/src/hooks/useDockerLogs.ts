@@ -9,6 +9,10 @@ interface UseDockerLogsOptions {
   maxLines?: number
 }
 
+/** Deja sólo las últimas `tope` entradas. Todas las rutas de inserción pasan por aquí. */
+const recortar = (lineas: LogEntry[], tope: number): LogEntry[] =>
+  lineas.length > tope ? lineas.slice(lineas.length - tope) : lineas
+
 export function useDockerLogs(
   containerId: string | null,
   options: UseDockerLogsOptions = {}
@@ -47,19 +51,17 @@ export function useDockerLogs(
       if (!isMounted) return
       try {
         const entry: LogEntry = JSON.parse(event.data)
-        setLogs((prev) => {
-          const next = [...prev, entry]
-          if (next.length > maxLines) {
-            return next.slice(next.length - maxLines)
-          }
-          return next
-        })
+        setLogs((prev) => recortar([...prev, entry], maxLines))
       } catch {
         const entry: LogEntry = {
           stream: 'stdout',
           message: event.data,
         }
-        setLogs((prev) => [...prev, entry])
+        // La rama de texto plano también pasa por el recorte: antes concatenaba
+        // sin tope, así que cualquier frame que no fuese JSON (una página de
+        // error de un proxy, un modo de log en crudo) hacía crecer el búfer sin
+        // límite aunque `maxLines` pusiera techo.
+        setLogs((prev) => recortar([...prev, entry], maxLines))
       }
     }
 

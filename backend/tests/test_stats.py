@@ -4,8 +4,8 @@ from httpx import AsyncClient
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app.services.stats_service import calculate_stats
 from app.schemas.stats import ContainerStats
+from app.services.stats_service import calculate_stats
 
 
 def _raw_stats(**overrides) -> dict:

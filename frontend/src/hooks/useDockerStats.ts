@@ -6,13 +6,14 @@ import { wsUrl } from '../services/wsUrl'
 interface UseDockerStatsOptions {
   maxHistory?: number
   reconnectDelay?: number
+  maxReconnectAttempts?: number
 }
 
 export function useDockerStats(
   containerId: string | null,
   options: UseDockerStatsOptions = {}
 ) {
-  const { maxHistory = 20, reconnectDelay = 2000 } = options
+  const { maxHistory = 20, reconnectDelay = 2000, maxReconnectAttempts = 5 } = options
 
   const [currentStats, setCurrentStats] = useState<ContainerStats | null>(null)
   const [history, setHistory] = useState<StatsHistoryPoint[]>([])
@@ -22,6 +23,7 @@ export function useDockerStats(
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const canReconnectRef = useRef<boolean>(true)
+  const intentosRef = useRef<number>(0)
 
   const clearHistory = useCallback(() => {
     setHistory([])
@@ -32,6 +34,7 @@ export function useDockerStats(
 
     let isMounted = true
     canReconnectRef.current = true
+    intentosRef.current = 0
 
     const clearReconnectTimer = () => {
       if (reconnectTimerRef.current) {
@@ -42,11 +45,22 @@ export function useDockerStats(
 
     const scheduleReconnect = () => {
       if (!isMounted || !canReconnectRef.current) return
+      if (intentosRef.current >= maxReconnectAttempts) {
+        setError(
+          `Se perdió la conexión con las métricas (${maxReconnectAttempts} reintentos). ` +
+            'Cierra y vuelve a abrir para reintentarlo.'
+        )
+        return
+      }
       clearReconnectTimer()
+      // Espera creciente: si el daemon está caído, reintentar cada 2 s sólo lo
+      // machaca más. El tope de 30 s evita esperar media hora.
+      const espera = Math.min(reconnectDelay * 2 ** intentosRef.current, 30000)
+      intentosRef.current += 1
       reconnectTimerRef.current = setTimeout(() => {
         reconnectTimerRef.current = null
         connect()
-      }, reconnectDelay)
+      }, espera)
     }
 
     const connect = () => {
@@ -60,6 +74,7 @@ export function useDockerStats(
           setConnected(true)
           setError(null)
         }
+        intentosRef.current = 0
       }
 
       ws.onmessage = (event) => {
@@ -96,6 +111,9 @@ export function useDockerStats(
       ws.onclose = (event) => {
         if (!isMounted) return
         setConnected(false)
+
+        // El backend manda 4400/4404 cuando el contenedor no existe o no
+        // corre: reintentar no puede arreglar eso.
         if (event.code === 4404) {
           canReconnectRef.current = false
           setError('Contenedor no encontrado en Docker')
@@ -106,6 +124,20 @@ export function useDockerStats(
           setError('El contenedor no está en ejecución')
           return
         }
+
+        // 1000 es el cierre NORMAL del backend (`finally: await close()`), y llega
+        // cuando el stream de métricas se acaba, es decir cuando el contenedor
+        // se ha parado. Reconectar ahí es lo que convertía la vista «Métricas» en
+        // un bucle infinito de 0.5 Hz contra el daemon: `stats()` sobre un
+        // contenedor parado falla con 409, el backend lo cuenta como fin de
+        // stream, cierra con 1000 otra vez, y vuelta a empezar. Para siempre.
+        if (event.code === 1000) {
+          canReconnectRef.current = false
+          setError('El contenedor dejó de enviar métricas')
+          return
+        }
+
+        // 1006 (red caída) y 1011 (fallo del backend) sí son reintentables.
         scheduleReconnect()
       }
     }
@@ -127,7 +159,7 @@ export function useDockerStats(
       }
       setConnected(false)
     }
-  }, [containerId, maxHistory, reconnectDelay])
+  }, [containerId, maxHistory, reconnectDelay, maxReconnectAttempts])
 
   return {
     currentStats,
