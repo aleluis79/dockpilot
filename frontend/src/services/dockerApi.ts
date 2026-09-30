@@ -28,6 +28,7 @@ import type {
   RenameContainerResponse,
 } from '../types/docker'
 import type { ContainerStats } from '../types/stats'
+import type { ListDirectoryResult } from '../types/filesystem'
 import type {
   ImageDeleteResponse,
   ImageDetail,
@@ -328,5 +329,77 @@ export const dockerApi = {
     // formado".
     const res = await fetch(`${BASE_URL}/compose/projects/${encodeURIComponent(name)}`)
     return handleResponse<ComposeProjectDetail>(res)
+  },
+  /**
+   * Lista un directorio de un contenedor (SPEC-20).
+   *
+   * La ruta es SIEMPRE del contenedor. Este cliente no tiene ningún método que
+   * reciba una ruta del host, y esa ausencia es deliberada: es lo que permite
+   * que el panel no escriba en el disco del usuario (SPEC-20 §3.2).
+   */
+  async listFiles(containerId: string, path: string): Promise<ListDirectoryResult> {
+    const res = await fetch(
+      `${BASE_URL}/containers/${containerId}/files?path=${encodeURIComponent(path)}`
+    )
+    return handleResponse<ListDirectoryResult>(res)
+  },
+
+  /**
+   * Descarga un fichero del contenedor como Blob.
+   *
+   * Devuelve el contenido y el nombre, y NO una ruta. Que sea el navegador el
+   * que lo guarde (con un Blob y un `download`) es lo que mantiene al backend
+   * fuera del disco del host: el usuario elige dónde acaba, y el panel nunca
+   * escribe ahí.
+   */
+  async downloadFile(
+    containerId: string,
+    path: string
+  ): Promise<{ blob: Blob; filename: string }> {
+    const res = await fetch(
+      `${BASE_URL}/containers/${containerId}/files/download?path=${encodeURIComponent(path)}`
+    )
+    if (!res.ok) {
+      return handleResponse<never>(res)
+    }
+    // El nombre viene en `content-disposition`. Se parsea a mano porque el
+    // filename* con acentos (RFC 5987) no lo pone `res.json()` por ningún lado.
+    const cabecera = res.headers.get('content-disposition') || ''
+    const coincidencia = /filename="([^"]+)"/.exec(cabecera)
+    const ultimo = path.split('/').pop() || 'fichero'
+    return { blob: await res.blob(), filename: coincidencia?.[1] || ultimo }
+  },
+
+  /**
+   * Sube ficheros al contenedor (SPEC-20).
+   *
+   * Se mandan los `File` que el navegador ya leyó del disco del usuario. El
+   * nombre (`webkitPath` si viene de una carpeta, `name` si no) viaja como
+   * parte del multipart; **la ruta local no viaja nunca**, porque el navegador
+   * no la expone. Con `webkitdirectory` el nombre incluye la carpeta, y por eso
+   * la estructura se conserva al subir.
+   */
+  async uploadFiles(
+    containerId: string,
+    path: string,
+    files: File[]
+  ): Promise<{ enviados: number }> {
+    const formulario = new FormData()
+    formulario.append('path', path)
+    for (const fichero of files) {
+      const relativo = (fichero as File & { webkitRelativePath?: string }).webkitRelativePath
+      formulario.append(
+        'files',
+        fichero,
+        relativo && relativo.length > 0 ? relativo : fichero.name
+      )
+    }
+    // Sin `Content-Type` a mano: el navegador tiene que poner el `boundary` del
+    // multipart, y si se lo damos nosotros la petición llega sin delimitar.
+    const res = await fetch(`${BASE_URL}/containers/${containerId}/files/upload`, {
+      method: 'POST',
+      body: formulario,
+    })
+    return handleResponse<{ enviados: number }>(res)
   },
 }

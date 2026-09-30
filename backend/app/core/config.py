@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     # alcanzarlo el tamaño sale parcial y marcado, nunca inventado.
     COMPOSE_BUILD_ESTIMATE_MAX_FILES: int = 20000
 
+    # Topes de la copia de ficheros de un contenedor (SPEC-20 §2.4). Docker NO
+    # impone ninguno: se escribieron y leyeron ficheros de 120 MB sin
+    # resistencia. El límite lo pone el panel y por razones distintas en cada
+    # sentido —una subida viaja por WebSocket y por la memoria del navegador; una
+    # descarga es una descarga— así que no son el mismo número.
+    FILES_UPLOAD_MAX_BYTES: int = 16 * 1024 * 1024
+    FILES_DOWNLOAD_MAX_BYTES: int = 64 * 1024 * 1024
+
+    # Máximo de entradas al listar un directorio del contenedor. Sin tope, una
+    # respuesta puede traer decenas de miles.
+    FILES_LIST_MAX_ENTRIES: int = 2000
+
     model_config = SettingsConfigDict(case_sensitive=True)
 
     @model_validator(mode="after")

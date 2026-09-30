@@ -258,6 +258,27 @@ Dos cosas que se creían buenas y no lo eran:
 
 El `409` del daemon trae el id del contenedor que ocupa el nombre, que el usuario nunca ve; se traduce a "Ya existe un contenedor llamado 'x'". Y la prevalidación de unicidad compara contra el inventario ya cargado, que sabe los nombres sin llamar al daemon: el `409` sigue siendo la verdad, pero es el caso raro.
 
+#### Ficheros de un contenedor: el listado NO va por el archive (SPEC-20)
+
+`GET /containers/{id}/archive` sobre un **directorio** devuelve el árbol entero recursivo **con el contenido de los ficheros**. Medido: `/etc` son 601 KiB y 424 entradas, y `/usr/lib` son **52 MB** para 177 nombres, en 2,4 s. Listar así no es un listado, es una descarga por cada directorio que se abre. Por eso el listado va por **`exec` con `ls -1A` y `ls -laA`**, y el archive sólo se usa para transferir.
+
+`ls` no tiene formato estable entre imágenes (el de alpine es busybox), y la línea larga tiene dos trampas que se resuelven así:
+
+| Trampa | Resolución |
+| :--- | :--- |
+| El día va rellenado a dos caracteres: `Jan  1  1970` | Separar la fecha con `split(None, 3)`, **nunca** por columnas |
+| `ls -la` no distingue un espacio de dos | Los nombres salen de `ls -1A` y se **emparejan**; lo que no empareja queda sin tamaño |
+
+**Sólo cuenta el primer miembro del tar** en la descarga, y esto no es un detalle: es la entrada de la ruta pedida. Buscar «el primer symlink» o «el primer fichero» del árbol devuelve un descendiente — pedir `/usr/lib` daba 200 con el contenido de `libGeoIP.so.1.6.12`, un symlink dos niveles más abajo—. Un symlink baja como enlace (su contenido es la ruta del destino, que es lo que escribiría `docker cp`) y un directorio se rechaza con 400, porque 52 MB para "bajar un fichero" no es una opción.
+
+**La frontera real es el namespace del contenedor, no este código.** `..` y los symlinks se resuelven dentro: `/datos/../../etc/hostname` devuelve el `/etc/hostname` del contenedor, y un symlink a `/` también. Lo que **sí** sale al host son los **bind mounts** —un `PUT` a `/datos` con `-v /tmp/x:/datos` aparece en `/tmp/x`, como root—, que es la frontera de Docker y la misma que tiene `docker exec`, que el panel ya expone. Por tanto esto **no añade privilegio**: cambia "escribo un comando" por "navego ficheros".
+
+Lo que hace que la feature sea compatible con el principio del panel es que **ninguna de las dos direcciones toca el disco del host**: `<input type="file">` entrega el contenido y no la ruta, y la descarga la resuelve el navegador con un Blob. El tar lo construye el backend a partir de un multipart, para validar en el servidor y no hace falta una librería de tar en el cliente. Hay un test sobre el **esquema OpenAPI** que fija que el endpoint de subida no tiene ningún campo donde meter una ruta del host: si algún día hace falta, es otro spec con el confinamiento de SPEC-14 §3.2.
+
+El botón vive en el **detalle**, no en la fila, y no por falta de espacio: el botón de terminal sólo sale con el contenedor **en marcha**, y a un contenedor **parado** se le pueden subir ficheros, que es justo cuando se le pone una configuración antes de arrancarlo.
+
+Un aviso que aparece **después** de la acción no es un aviso, es una disculpa. El de contenedor en marcha pide confirmación: no bloquea (subir a un parado es legítimo) pero para subir hay que haberlo leído.
+
 #### Trampa: un búfer de stream sin tope no es sólo memoria
 
 El visor de logs de contenedor corta a 2000 entradas. El de compose **no cortaba nada**, y `ComposeLogsViewer` vuelve a trocear el historial entero en cada fragmento: un `logs --follow` de un servicio que parlaba mucho se convertía en O(n²) de CPU además de un heap sin límite.
@@ -339,6 +360,7 @@ dockpilot/
 │   │   ├── schemas/
 │   │   │   ├── compose.py
 │   │   │   ├── container.py      # HealthSummary/HealthDetail (SPEC-18)
+│   │   │   ├── filesystem.py     # Ficheros de un contenedor (SPEC-20)
 │   │   │   ├── image.py
 │   │   │   ├── log.py
 │   │   │   ├── network.py
@@ -347,6 +369,7 @@ dockpilot/
 │   │   │   ├── terminal.py
 │   │   │   └── volume.py
 │   │   ├── services/
+│   │   │   ├── container_files_service.py  # Listado por `ls` y copia en ambos sentidos (SPEC-20)
 │   │   │   ├── compose_cli.py      # ÚNICO módulo que lanza procesos (SPEC-12)
 │   │   │   ├── compose_service.py  # Inventario (SPEC-11), build_plan (SPEC-12) y el confinamiento
 │   │   │                      # de rutas que comparten browse, plan y ciclo de vida (SPEC-14)
@@ -382,7 +405,7 @@ dockpilot/
 │   │   ├── components/
 │   │   │   ├── layout/            # Navbar, ThemeProvider, ThemeToggle
 │   │   │   ├── ui/                # StatusBadge, modalOverlay (velo compartido)
-│   │   │   ├── containers/        # Tabla, acciones y modales de contenedor
+│   │   │   ├── containers/        # Tabla, acciones y modales de contenedor (incluido ContainerFilesModal, SPEC-20)
 │   │   │   ├── terminal/          # TerminalModal, TerminalViewer, temas de xterm
 │   │   │   ├── logs/              # LogsModal, LogsViewer
 │   │   │   ├── stats/             # StatsModal, StatsSparkline
@@ -399,7 +422,7 @@ dockpilot/
 │   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats, useTheme, useImagePull,
 │   │   │                         # useNetworks, useSystemOverview, useComposeProjects, useComposeCommand
 │   │   ├── services/              # dockerApi.ts, wsUrl.ts
-│   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts, volume.ts, network.ts, system.ts, compose.ts
+│   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts, volume.ts, network.ts, system.ts, compose.ts, filesystem.ts
 │   │   ├── utils/                 # format.ts (formatBytes, formatPercent), compose.ts (rutaDeProyecto),
 │   │   │                         # buffer.ts (acumular: búfer acotado para streams),
 │   │   │                         # containerName.ts (reglas de nombre de contenedor, SPEC-19)

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 from aiodocker.exceptions import DockerError, DockerStreamError
+from aiodocker.stream import Message
 from httpx import ASGITransport, AsyncClient
 
 from app.core.docker import get_docker
@@ -996,8 +997,10 @@ def mock_docker():
     class ContextoLogs:
         """`_query` de aiodocker devuelve esto, y el servicio lo usa con `async with`."""
 
-        def __init__(self, endpoint: str, **kwargs) -> None:
-            self._datos = logs_por_contenedor.get(endpoint, b"")
+        def __init__(self, endpoint: str, datos: bytes | None = None, **_k) -> None:
+            self._datos = (
+                logs_por_contenedor.get(endpoint, b"") if datos is None else datos
+            )
 
         async def __aenter__(self) -> RespuestaLogs:
             return RespuestaLogs(self._datos)
@@ -1407,6 +1410,320 @@ def spawn_call(monkeypatch) -> list[dict]:
 
     monkeypatch.setattr(compose_cli.asyncio, "create_subprocess_exec", _falso)
     return capturados
+
+
+# --- SPEC-20: ficheros de un contenedor ---------------------------------------
+#
+# El listado va por `exec` con `ls`, no por el archive API, porque el archive
+# sobre un directorio devuelve el árbol entero CON el contenido: `/usr/lib` son
+# 51 MB para 177 nombres (SPEC-20 §2.2).
+#
+# La salida de abajo es LITERAL, capturada de un nginx:alpine (busybox) en el
+# daemon 29.8.1. Va literal a propósito: el parser tiene que aguantar el relleno
+# de columnas y el día rellenado con espacios ("Jan  1  1970"), y un doble que
+# inventara su propia salida no lo obligaría a aguantar nada.
+
+LS_LA_A_DATOS = (
+    b"drwxr-xr-x    2 root     root             4096 Sep 30 23:20 con espacios\n"
+    b"-rw-rw-r--    1 1000     1000                2 Sep 30 23:20 doble  espacio.txt\n"
+    b"drwxr-xr-x    2 root     root             4096 Sep 30 23:20 sub\n"
+    b"-rw-r--r--    1 root     root             2048 Sep 30 23:20 uno.txt\n"
+    b"lrwxrwxrwx    1 root     root                6 Jan  1  1970 atajo -> /datos\n"
+    b"-rw-r--r--    1 root     root               10 Sep 30 23:20 .oculto\n"
+)
+LS_1_A_DATOS = (
+    b"con espacios\n"
+    b"doble  espacio.txt\n"
+    b"sub\n"
+    b"uno.txt\n"
+    b"atajo\n"
+    b".oculto\n"
+)
+LS_LA_A_VACIO = b"total 0\n"
+
+# `/etc` de un nginx:alpine. El real tiene 424 entradas (601 KiB); aquí va un
+# subconjunto representativo, incluido el symlink `mtab -> /proc/mounts`, que es
+# la razón de que la columna del enlace exista.
+LS_1_A_ETC = b"hostname\nhosts\nnginx.conf\nmtab\npasswd\nresolv.conf\n"
+LS_LA_A_ETC = (
+    b"-rw-r--r--    1 root     root               16 Sep 30 23:20 hostname\n"
+    b"-rw-r--r--    1 root     root              174 Sep 30 23:20 hosts\n"
+    b"-rw-r--r--    1 root     root             1207 Sep 30 23:20 nginx.conf\n"
+    b"lrwxrwxrwx    1 root     root               13 Sep 30 23:20 mtab -> /proc/mounts\n"
+    b"-rw-r--r--    1 root     root             1486 Sep 30 23:20 passwd\n"
+    b"-rw-r--r--    1 root     root              106 Sep 30 23:20 resolv.conf\n"
+)
+
+
+class ContenidoBinario:
+    """`readexactly`/`iter_any` sobre un buffer, con EOF al agotarse.
+
+    Es el mismo contrato que `ContenidoFalso`, pero a nivel de módulo: el
+    archivo se sirve por `_query` desde OTRO fixture, y `ContenidoFalso` vive
+    dentro de `mock_docker` y no se ve desde aquí.
+    """
+
+    def __init__(self, datos: bytes) -> None:
+        self._datos = datos
+        self._pos = 0
+
+    async def readexactly(self, n: int) -> bytes:
+        if self._pos + n > len(self._datos):
+            raise asyncio.IncompleteReadError(self._datos[self._pos :], n)
+        trozo = self._datos[self._pos : self._pos + n]
+        self._pos += len(trozo)
+        return trozo
+
+    async def iter_any(self):
+        if self._datos:
+            yield self._datos
+
+
+class RespuestaBinaria:
+    def __init__(self, datos: bytes) -> None:
+        self.content = ContenidoBinario(datos)
+
+
+class ContextoBinario:
+    """El `async with` de `docker._query`, con un cuerpo binario."""
+
+    def __init__(self, datos: bytes) -> None:
+        self._datos = datos
+
+    async def __aenter__(self) -> RespuestaBinaria:
+        return RespuestaBinaria(self._datos)
+
+    async def __aexit__(self, *_exc) -> bool:
+        return False
+
+
+class FakeExecListado:
+    """El `exec` de `ls`: entrega bytes y se cierra, sin bucle de espera.
+
+    A diferencia de `FakeExec` (la terminal, que es interactiva), aquí no hay TTY
+    ni entrada: `ls` escribe, sale, y el stream acaba. `read_out` devuelve el
+    bloque entero como un único mensaje de stdout, que es lo que produce aiodocker
+    con `tty=False`.
+    """
+
+    def __init__(self, salida: bytes, codigo: int = 0):
+        self.salida = salida
+        self.codigo = codigo
+        self.id = "exec_ls"
+        self.tty = False
+        self.running = False
+
+    def start(self, **_k):
+        return self
+
+    async def read_out(self):
+        if self.salida:
+            pendiente, self.salida = self.salida, b""
+            return Message(1, pendiente)
+        return None
+
+    async def close(self):
+        self.running = False
+
+
+class FakeExecFallo(FakeExecListado):
+    """`ls` sobre una ruta que no existe: stderr y código de salida 2.
+
+    Va por el stream 2 a propósito. La primera versión de este doble metía el
+    mensaje de error en stdout y el servicio lo tomaba por un listado con un
+    fichero llamado "ls: cannot open...". El servicio decide "no existe" por
+    `stderr`, igual que `ls`, y el doble tiene que ser fiel a eso.
+    """
+
+    def __init__(self, mensaje: bytes = b"ls: cannot open directory: No such file or directory\n"):
+        super().__init__(salida=b"", codigo=2)
+        self._mensaje = mensaje
+        self._pendiente = True
+
+    async def read_out(self):
+        if self._pendiente:
+            self._pendiente = False
+            return Message(2, self._mensaje)
+        return None
+
+
+class FakeExecVacio(FakeExecListado):
+    def __init__(self):
+        super().__init__(salida=b"")
+
+
+async def _leer_stream(stream: FakeExecListado) -> bytes:
+    """Lee el exec entero hasta que se agota. Es lo que hará el servicio."""
+    salida = b""
+    while True:
+        msg = await stream.read_out()
+        if msg is None:
+            return salida
+        salida += msg.data
+
+
+@pytest.fixture
+def files_client_contenido(mock_docker_files):
+    """El filesystem en memoria del contenedor falso, para comprobar qué aterrizó.
+
+    Los tests de subida miran aquí en vez de o haciendo un viaje de ida y vuelta por la API, para que
+    un fallo diga "no escribió esto" y no "el viaje de vuelta no lo trajo".
+    """
+    return mock_docker_files.ficheros_contenedor
+
+
+@pytest_asyncio.fixture
+async def files_client(mock_docker, mock_docker_files):
+    """Cliente HTTP del explorador de ficheros de un contenedor (SPEC-20)."""
+    app.dependency_overrides[get_docker] = lambda: mock_docker
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        client.contenedores = mock_docker.containers_db
+        yield client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def mock_docker_files(mock_docker):
+    """Extiende `mock_docker` con un contenedor que tiene ficheros de verdad.
+
+    Modela lo que se midió en el daemon, no lo que sería cómodo:
+      - `ls -1A` y `ls -laA` salen por exec con la ruta EN EL ARGV (§3.3).
+      - El archive GET devuelve un **tar** con un solo miembro, que es como lo
+        devuelve Docker para un fichero (no el contenido pelado).
+      - El archive PUT **extrae** el tar en un dict: subir y volver a bajar
+        devuelve los mismos bytes, así que el viaje redondo se prueba de verdad.
+      - Un miembro con `..` se rechaza con el mismo error que el daemon real:
+        `500 invalid entry name` (SPEC-20 §3.1). Es la red de seguridad del
+        daemon; el servicio tiene que traducirlo a un 400 con su mensaje.
+    """
+    c_archivos = FakeDockerContainer(
+        cid="c777",
+        name="/con-ficheros",
+        image="nginx:alpine",
+        status="running",
+        state="running",
+    )
+    # Salidas de `ls` por ruta. Se usan literales para no inventar formato.
+    listados: dict[str, tuple[bytes, bytes]] = {
+        "/datos": (LS_1_A_DATOS, LS_LA_A_DATOS),
+        "/datos/sub": (b"", LS_LA_A_VACIO),
+        "/etc": (LS_1_A_ETC, LS_LA_A_ETC),
+        "/": (b"datos\netc\n", None),
+    }
+    # El filesystem del contenedor, en memoria: ruta -> bytes del fichero.
+    # Tars listos para servir tal cual, para los casos que no son "un
+    # fichero": un directorio, un symlink, un tar vacío.
+    tar_por_ruta: dict[str, bytes] = {}
+    # Symlinks reales: ruta -> destino. El archive responde con un miembro
+    # `issym` de size 0 y `linkname`, y NO con el contenido del destino.
+    symlinks: dict[str, str] = {}
+    ficheros: dict[str, bytes] = {
+        "/datos/uno.txt": b"contenido de uno\n",
+        "/datos/.oculto": b"soy oculto\n",
+        "/datos/doble  espacio.txt": b"dos espacios\n",
+    }
+    # Lo que el daemon rechaza por nombre de miembro inválido.
+    nombres_rechazados: set[str] = set()
+
+    c_archivos.ejecuciones: list[list[str]] = []
+    c_archivos.listados = listados
+    c_archivos.ficheros = ficheros
+    c_archivos.nombres_rechazados = nombres_rechazados
+
+    exec_original = c_archivos.exec
+
+    async def exec_que_sabe_ls(cmd, **kwargs):
+        argv = list(cmd) if not isinstance(cmd, str) else cmd.split()
+        c_archivos.ejecuciones.append(argv)
+        if argv and argv[0] == "ls":
+            # La ruta es el último elemento del argv: es el contrato de §3.3 y
+            # lo que impide que `..` o un `;` se interpreten como shell.
+            ruta = argv[-1]
+            if ruta not in listados:
+                return FakeExecFallo()
+            uno, la = listados[ruta]
+            if la is None:
+                # La raiz no tiene version larga: obliga a que el servicio
+                # sobreviva a que `ls -laA` no encaje con `ls -1A`.
+                la = uno
+            return FakeExecListado(la if "-laA" in argv else uno)
+        return await exec_original(cmd, **kwargs)
+
+    c_archivos.exec = exec_que_sabe_ls
+    mock_docker.containers_db["c777"] = c_archivos
+
+    # SIN `async def`: `docker._query(...)` devuelve el gestor de contexto, no
+    # una corrutina. Con `async def` el servicio recibe una corrutina y revienta
+    # al hacer `async with` — que es como seEQUIVOCABA la primera versión.
+    def fake_query_ficheros(endpoint: str = "", **_k):
+        if not endpoint.endswith("/archive"):
+            return None
+        cid = endpoint.split("/")[1]
+        k = _k
+        metodo = (k.get("method") or "GET").upper()
+        params = k.get("params") or {}
+        ruta = params.get("path", "/")
+
+        if metodo == "GET":
+            import io as _io
+            import tarfile as _tf
+
+            # Docker devuelve un TAR con un solo miembro para un fichero. En una
+            # ruta que no existe responde 404.
+            if ruta in tar_por_ruta:
+                return ContextoBinario(tar_por_ruta[ruta])
+            if ruta in symlinks:
+                buf_s = _io.BytesIO()
+                with _tf.open(fileobj=buf_s, mode="w") as tf:
+                    info = _tf.TarInfo(ruta.lstrip("/"))
+                    info.type = _tf.SYMTYPE
+                    info.linkname = symlinks[ruta]
+                    tf.addfile(info)
+                return ContextoBinario(buf_s.getvalue())
+            if ruta not in ficheros:
+                raise DockerError(404, {"message": f"Could not find the file {ruta} in container {cid}"})
+            buf = _io.BytesIO()
+            with _tf.open(fileobj=buf, mode="w") as tf:
+                datos = ficheros[ruta]
+                info = _tf.TarInfo(ruta.lstrip("/"))
+                info.size = len(datos)
+                tf.addfile(info, _io.BytesIO(datos))
+            return ContextoBinario(buf.getvalue())
+
+        # PUT: se valida el nombre del miembro igual que el daemon real.
+        import io as _io
+        import tarfile as _tf
+
+        cuerpo = k.get("data") or b""
+        with _tf.open(fileobj=_io.BytesIO(cuerpo), mode="r") as tf:
+            miembros = tf.getmembers()
+            for m in miembros:
+                partes = m.name.replace("\\", "/").split("/")
+                if ".." in partes or m.name.startswith("/"):
+                    raise DockerError(
+                        500,
+                        {"message": f'invalid entry name "{m.name}": must not contain ".."'},
+                    )
+            for m in miembros:
+                if m.isfile():
+                    destino = f"{ruta.rstrip('/')}/{m.name}".replace("//", "/")
+                    ficheros[destino] = tf.extractfile(m).read()
+        return ContextoBinario(b"")
+
+    query_original = mock_docker._query
+
+    def _query_con_ficheros(endpoint: str = "", **k):
+        if endpoint.endswith("/archive"):
+            return fake_query_ficheros(endpoint, **k)
+        return query_original(endpoint, **k)
+
+    mock_docker._query = _query_con_ficheros
+    mock_docker.tar_por_ruta = tar_por_ruta
+    mock_docker.symlinks = symlinks
+    mock_docker.ficheros_contenedor = ficheros
+    mock_docker.nombres_rechazados = nombres_rechazados
+    return mock_docker
 
 
 @pytest_asyncio.fixture

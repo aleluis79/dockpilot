@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import React, { useEffect, useState } from 'react'
 import { MODAL_OVERLAY } from '../ui/modalOverlay'
-import { X, Server, Network, HardDrive, Terminal as TermIcon, Tag, Clock, Pencil } from 'lucide-react'
+import { X, Server, Network, HardDrive, Terminal as TermIcon, Tag, Clock, Pencil, FolderTree } from 'lucide-react'
 import type { ContainerDetail, ContainerSummary } from '../../types/docker'
 import { dockerApi } from '../../services/dockerApi'
 import { StatusBadge } from '../ui/StatusBadge'
 import { ContainerHealthPanel } from './ContainerHealthPanel'
 import { RenameContainerModal } from './RenameContainerModal'
+import { ContainerFilesModal } from './ContainerFilesModal'
 
 interface ContainerDetailModalProps {
   container: ContainerSummary | null
@@ -31,6 +32,7 @@ export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
   const [renombrando, setRenombrando] = useState<boolean>(false)
+  const [viendoFicheros, setViendoFicheros] = useState<boolean>(false)
   // El nombre viene en el prop `container.name`, que no cambia al renombrar: si
   // la cabecera leyera de ahí, seguiría mostrando el nombre viejo hasta que el
   // padre refrescara. Se guarda en estado local justo para eso (SPEC-19).
@@ -102,6 +104,14 @@ export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
             </div>
           </div>
 <button
+              onClick={() => setViendoFicheros(true)}
+              title="Explorar los ficheros del contenedor"
+              className="p-1.5 text-fg-muted hover:text-fg hover:bg-fg/10 rounded-lg transition-colors"
+              aria-label="Explorar ficheros del contenedor"
+            >
+              <FolderTree className="w-5 h-5" />
+            </button>
+            <button
               onClick={() => setRenombrando(true)}
               title="Cambiar el nombre del contenedor"
               className="p-1.5 text-fg-muted hover:text-fg hover:bg-fg/10 rounded-lg transition-colors"
@@ -245,6 +255,22 @@ export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
       {/* El diálogo de renombrado va por encima del detalle, no dentro: el
           detalle queda montado detrás y al cerrar se vuelve a él, que es lo que
           espera quien estaba leyendo sus datos. */}
+      {/* Va en el DETALLE y no en la fila de la tabla por dos razones. La
+          primera es que la fila ya tiene logs, métricas, terminal y borrar, y es
+          de sólo lectura salvo para lo destructivo. La segunda, y la que de
+          verdad manda: el botón de terminal sólo sale con el contenedor en
+          marcha, pero a un contenedor PARADO se le pueden subir ficheros, que es
+          justo cuando se le pone una configuración antes de arrancarlo. En la
+          tabla esa acción no existiría. */}
+      {viendoFicheros && container && (
+        <ContainerFilesModal
+          isOpen={true}
+          onClose={() => setViendoFicheros(false)}
+          containerId={container.id}
+          containerName={nombre}
+          containerState={detail?.state ?? container.state}
+        />
+      )}
       {renombrando && container && (
         <RenameContainerModal
           containerId={container.id}
