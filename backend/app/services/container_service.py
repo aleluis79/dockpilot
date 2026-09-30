@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-import inspect
+import asyncio
 import re
 import shlex
+import struct
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any
 
 import aiodocker
+import aiohttp
 from aiodocker.exceptions import DockerError
 from fastapi import HTTPException
 
@@ -86,36 +88,47 @@ def parse_docker_log_line(
 ) -> LogEntry:
     """Parsea una línea cruda de log de Docker separando timestamp y stream.
 
+    Para el **snapshot** y el WebSocket, que siguen por `container.log()` de
+    aiodocker y llegan sin el byte de stream. El camino de `stream_logs` usa
+    `_entrada_de_log` con el stream real del frame y no pasa por aquí.
+    """
+    return _entrada_de_log(raw_line, default_stream, timestamps)
+
+
+def _entrada_de_log(linea: str, stream: str, timestamps: bool) -> LogEntry:
+    """Separa el timestamp inicial del mensaje, con el stream ya conocido.
+
     `timestamps` importa: es el flag que se le pasó a `container.log()`, así que
     el parser sabe si puede haber un timestamp delante. Sin esa pista, el sniff
     anterior se comía el primer token de cualquier línea normal que contuviera
     una `T` y un signo: `"T-shirt S-M: 42 items"` salía como timestamp `T-shirt:`
     y mensaje `S-M: 42 items`.
     """
-    clean = raw_line.rstrip("\r\n")
-    message = clean
-    timestamp: str | None = None
-
+    limpia = linea.rstrip("\r\n")
     if timestamps:
-        parts = clean.split(" ", 1)
-        if len(parts) == 2 and _TIMESTAMP_RE.match(parts[0]):
-            timestamp = parts[0]
-            message = parts[1]
+        partes = limpia.split(" ", 1)
+        if len(partes) == 2 and _TIMESTAMP_RE.match(partes[0]):
+            return LogEntry(timestamp=partes[0], stream=stream, message=partes[1])
 
-    stream = default_stream
-    if _es_stderr(message):
-        stream = "stderr"
+    # Sin timestamp fiable, el stream viene del frame y no hay que adivinarlo.
+    if stream != "stdout":
+        return LogEntry(timestamp=None, stream=stream, message=limpia)
 
-    return LogEntry(timestamp=timestamp, stream=stream, message=message)
+    return LogEntry(
+        timestamp=None,
+        stream="stderr" if _es_stderr(limpia) else "stdout",
+        message=limpia,
+    )
 
 
 def _es_stderr(message: str) -> bool:
-    """Distingue stderr de stdout por la marca de Docker o por el prefijo.
+    """Último recurso para decidir el stream de una línea.
 
-    El frame multiplexado de Docker **sí** lleva el stream en el byte de
-    cabecera, pero aiodocker lo descarta (`MultiplexedResult` lee el `>BxxxL` y
-    tira el byte). Así que desde aquí no hay forma de saberlo con certeza y esto
-    es, sí o sí, una heurística sobre el texto.
+    Con el stream ya leído del frame multiplexado (§ `_stream_demultiplexado`)
+    esto **no hace falta**: cada línea llega con su stream. Se conserva para los
+    dos caminos que no pasan por el demultiplexador —el snapshot REST y el WebSocket,
+    que siguen usando `container.log()` de aiodocker— y para que un `LogEntry`
+    construido a mano no quede sin stream.
 
     Se prefiere la falsa negativa a la falsa positiva: se marca como stderr
     cuando la línea lleva marca explícita (`[stderr]`, `ERROR:`, `FATAL:`...), y
@@ -125,6 +138,113 @@ def _es_stderr(message: str) -> bool:
     y las sacaba del filtro de stdout del visor.
     """
     return bool(_STDERR_RE.match(message.lower()))
+
+
+# --- Demultiplexado del stream de logs -----------------------------------------
+#
+# Docker multiplexa stdout y stderr en un solo stream: cada frame lleva una
+# cabecera de 8 bytes, `>BxxxL`, donde el primer byte ES el stream y los cuatro
+# últimos su longitud. aiodocker **descarta ese byte**
+# (`MultiplexedResult.fetch`: `_, length = struct.unpack(">BxxxL", header)`), así
+# que con `container.log()` no hay forma de saber de qué stream salió una línea
+# y la única señal disponible es el texto, que es una heurística y falla.
+#
+# Leer el stream a mano es la única forma de hacerlo bien, y el proyecto ya usa
+# primitivas internas de aiodocker en otros sitios (`_query_json` para redes y
+# para `/system/df`), así que no es una excepción nueva. El formato está
+# documentado en la API de Docker y es estable.
+
+_STREAM_HEADER_BYTES = 8
+
+# Byte 1 = stdout, byte 2 = stderr. El 0 (stdin) no llega en logs.
+_NOMBRES_STREAM = {1: "stdout", 2: "stderr"}
+
+
+async def _stream_demultiplexado(
+    docker: aiodocker.Docker,
+    container: Any,
+    *,
+    tail: int,
+    timestamps: bool,
+    follow: bool,
+) -> AsyncIterator[tuple[int | None, str]]:
+    """Emite `(stream, línea)` leyendo la cabecera de cada frame.
+
+    Con `tty=True` Docker **no** multiplexa: sale todo por stdout y sin cabecera,
+    que es el caso `raw` de aiodocker y el único en el que `stream` no aporta
+    nada. Se detecta igual, por el `Config.Tty` del contenedor.
+
+    Un frame puede traer varias líneas o una línea a medias entre frames, así que
+    se acumula un buffer y se corta por `\n`. El buffer **no** se reparte por
+    stream: si una línea se parte entre un frame de stdout y otro de stderr, es la
+    misma línea y el corte por stream la trocearía en dos.
+    """
+    try:
+        info = await container.show()
+    except Exception:
+        info = {}
+    es_tty = bool(_as_dict_get(info, "Config").get("Tty"))
+
+    cm = docker._query(
+        f"containers/{getattr(container, '_id', container.id)}/logs",
+        method="GET",
+        params={
+            "stdout": True,
+            "stderr": True,
+            "follow": follow,
+            "tail": tail,
+            "timestamps": timestamps,
+        },
+        # Logs y stats son de larga duración: sin `total` ni `sock_read` el
+        # stream no se corta nunca solo. `None` es exactamente eso.
+        timeout=None,
+    )
+
+    async with cm as response:
+        buffer = ""
+        # El stream de la línea en curso, para no trocearla al cambiar de frame.
+        stream_actual: int | None = 1
+        async for stream, payload in _frames(response.content, es_tty):
+            stream_actual = stream_actual if stream is None else stream
+            buffer += payload.decode("utf-8", errors="replace")
+            *lineas, buffer = buffer.split("\n")
+            for linea in lineas:
+                yield stream_actual, linea
+        if buffer:
+            yield stream_actual, buffer
+
+
+async def _frames(
+    contenido: Any, es_tty: bool
+) -> AsyncIterator[tuple[int | None, bytes]]:
+    """Trocear el stream en frames, devolviendo el byte de stream de cada uno.
+
+    Con TTY no hay cabecera y todo es stdout, así que el byte sale como `None` y
+    quien llama lo interpreta.
+    """
+    if es_tty:
+        async for chunk in contenido.iter_any():
+            yield None, chunk
+        return
+
+    try:
+        while True:
+            cabecera = await contenido.readexactly(_STREAM_HEADER_BYTES)
+            stream, longitud = struct.unpack(">BxxxL", cabecera)
+            if not longitud:
+                # Frame vacío (stdout o stderr cerrado): el protocolo lo permite
+                # y no debe cortarse el stream por ello.
+                continue
+            yield stream, await contenido.readexactly(longitud)
+    except (asyncio.IncompleteReadError, aiohttp.ClientConnectionError, aiohttp.ServerDisconnectedError):
+        # El contenedor se paró o se cerró la conexión: fin del stream, no un
+        # error. Es el mismo criterio que usa `MultiplexedResult.fetch`.
+        return
+
+
+def _as_dict_get(datos: Any, clave: str) -> dict[str, Any]:
+    valor = datos.get(clave) if isinstance(datos, dict) else None
+    return valor if isinstance(valor, dict) else {}
 
 
 class ContainerService:
@@ -245,12 +365,16 @@ class ContainerService:
     ) -> LogSnapshotResponse:
         try:
             container = await docker.containers.get(container_id)
-            res = container.log(
-                stdout=True, stderr=True, follow=False, tail=tail, timestamps=timestamps
-            )
-            raw_lines = await res if inspect.iscoroutine(res) else res
-
-            entries = [parse_docker_log_line(line, timestamps=timestamps) for line in raw_lines]
+            # Mismo camino desmultiplexado que el stream en vivo, para que el
+            # snapshot inicial y lo que llega después no se contradigan: si el
+            # snapshot clasificara por el texto y el stream por el byte de
+            # cabecera, una línea cambiaría de stream a mitad de la vista.
+            entries = [
+                _entrada_de_log(linea, _NOMBRES_STREAM.get(stream, "stdout"), timestamps)
+                async for stream, linea in _stream_demultiplexado(
+                    docker, container, tail=tail, timestamps=timestamps, follow=False
+                )
+            ]
             return LogSnapshotResponse(
                 id=container_id,
                 total_lines=len(entries),
@@ -275,12 +399,16 @@ class ContainerService:
     ) -> AsyncIterator[LogEntry]:
         try:
             container = await docker.containers.get(container_id)
-            res = container.log(
-                stdout=True, stderr=True, follow=follow, tail=tail, timestamps=timestamps
-            )
-            stream = await res if inspect.iscoroutine(res) else res
-            async for raw_line in stream:
-                yield parse_docker_log_line(raw_line, timestamps=timestamps)
+            # Camino con el stream real: cada línea llega con su stream del byte
+            # de cabecera de Docker, sin adivinar por el texto.
+            async for stream, linea in _stream_demultiplexado(
+                docker,
+                container,
+                tail=tail,
+                timestamps=timestamps,
+                follow=follow,
+            ):
+                yield _entrada_de_log(linea, _NOMBRES_STREAM.get(stream, "stdout"), timestamps)
         except DockerError as e:
             if e.status == 404:
                 raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e

@@ -62,6 +62,12 @@ export function ProjectDetailModal({
     }
   }, [project])
 
+  // Cuenta sólo los servicios con nombre: el cubo `""` son contenedores sin
+  // `com.docker.compose.service`, que el backend no computa como servicios en
+  // `services_count` y la tabla sí cuenta. Contarlos aquí haría que la cabecera
+  // y la píldora de la tabla dieran números distintos para lo mismo.
+  const serviciosNombrados = detail?.services.filter((s) => s.name).length ?? 0
+
   return (
     <div className={MODAL_OVERLAY} onClick={onClose}>
       <div
@@ -165,7 +171,7 @@ export function ProjectDetailModal({
 
             <div>
               <h4 className="text-xs font-semibold text-fg mb-1.5">
-                Servicios ({detail.services.length})
+                Servicios ({serviciosNombrados})
               </h4>
               {detail.services.length === 0 ? (
                 <p className="text-fg-subtle">Sin contenedores, así que sin servicios.</p>

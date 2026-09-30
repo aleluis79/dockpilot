@@ -112,6 +112,45 @@ describe('ComposePlanModal', () => {
     expect(cuerpo.content).toBe('services:\n  nuevo:\n    image: x')
   })
 
+  it('descarta el plan cuando se edita la ruta', async () => {
+    // El plan es del archivo validado, no del que ahora anuncia el campo. Sin
+    // descartarlo, validar `/a/dc.yml`, retipear `/b/dc.yml` y pulsar Desplegar
+    // ejecutaría `/a` mientras la interfaz dice `/b`: el preview que se ve y lo
+    // que se despliega discreparían (SPEC-12 §3.1).
+    mockOk()
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    const campo = screen.getByLabelText(/ruta del archivo/i)
+    fireEvent.change(campo, { target: { value: '/a/dc.yml' } })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+
+    fireEvent.change(campo, { target: { value: '/b/dc.yml' } })
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('compose-plan')).not.toBeInTheDocument()
+    )
+    expect(
+      screen.queryByRole('button', { name: /desplegar/i }),
+      'sin plan no puede haber botón de desplegar'
+    ).not.toBeInTheDocument()
+  })
+
+  it('mantiene el plan si la ruta no cambia de verdad', async () => {
+    mockOk()
+    render(<ComposePlanModal open onClose={vi.fn()} />)
+
+    const campo = screen.getByLabelText(/ruta del archivo/i)
+    fireEvent.change(campo, { target: { value: '/a/dc.yml' } })
+    fireEvent.click(screen.getByRole('button', { name: /^validar$/i }))
+    await waitFor(() => expect(screen.getByTestId('compose-plan')).toBeInTheDocument())
+
+    // Reemitir el mismo valor no debe invalidar nada.
+    fireEvent.change(campo, { target: { value: '/a/dc.yml' } })
+
+    expect(screen.getByTestId('compose-plan')).toBeInTheDocument()
+  })
+
   it('no llama al backend sin ruta', async () => {
     const fetchMock = mockOk()
     render(<ComposePlanModal open onClose={vi.fn()} />)

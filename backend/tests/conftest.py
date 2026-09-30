@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import asyncio
+import struct
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
 
@@ -52,6 +53,20 @@ class FakeExec:
         self.tty = tty
         self.stream = FakeExecStream()
         self.resized_with = None
+        # Si el exec sigue vivo al cerrar la sesión. Con TTY el shell no ve el
+        # EOF de la entrada estándar, así que sobrevive; sin TTY, `/bin/sh`
+        # sale al recibirlo.
+        self.running = tty
+        self.inspect_called = 0
+
+    async def inspect(self) -> dict:
+        self.inspect_called += 1
+        return {
+            "ID": self.id,
+            "Running": self.running,
+            "ExitCode": None if self.running else 0,
+            "ProcessConfig": {"tty": self.tty},
+        }
 
     async def resize(self, h: int | None = None, w: int | None = None):
         self.resized_with = {"h": h, "w": w}
@@ -236,6 +251,22 @@ class FakeDockerContainer:
                 yield line
 
         return _stream()
+
+    @staticmethod
+    def multiplexed_logs(frames: list[tuple[int, str]]) -> bytes:
+        """Los logs de este contenedor, en el formato de cable de Docker.
+
+        `frames` son pares `(byte_de_stream, línea)`: 1 = stdout, 2 = stderr. El
+        servicio desmultiplexa el stream leyendo esa cabecera de 8 bytes, así que
+        el doble tiene que emitirla de verdad o el demultiplexador no se está
+        ejercitando: un doble que devuelve líneas sueltas dejaría el stream en
+        `None` y todos los tests pasarían sin tocar el camino real.
+        """
+        crudo = b""
+        for stream, linea in frames:
+            payload = linea.encode("utf-8")
+            crudo += struct.pack(">BxxxL", stream, len(payload)) + payload
+        return crudo
 
     async def exec(self, cmd, stdout=True, stderr=True, stdin=True, tty=True, **kwargs):
         if self._status != "running":
@@ -818,6 +849,54 @@ def mock_docker():
     mock.networks = fake_networks_obj
     mock.system = fake_system
     mock._query_json = AsyncMock(side_effect=fake_query_json)
+
+    # `container_service` lee los logs por la vía cruda (`docker._query`) para
+    # poder desmultiplexar stdout y stderr: aiodocker tira el byte de cabecera
+    # y con su stream no hay forma de saber de qué stream salió cada línea. El
+    # doble sirve el formato de cable real (`>BxxxL` + payload) para que ese
+    # camino se ejercite de verdad.
+    logs_por_contenedor: dict[str, bytes] = {}
+
+    class ContenidoFalso:
+        """`readexactly` sobre un buffer, con EOF al agotarse."""
+
+        def __init__(self, datos: bytes) -> None:
+            self._datos = datos
+            self._pos = 0
+
+        async def readexactly(self, n: int) -> bytes:
+            if self._pos + n > len(self._datos):
+                raise asyncio.IncompleteReadError(self._datos[self._pos :], n)
+            trozo = self._datos[self._pos : self._pos + n]
+            self._pos += n
+            return trozo
+
+        async def iter_any(self):
+            if self._datos:
+                yield self._datos
+
+    class RespuestaLogs:
+        def __init__(self, datos: bytes) -> None:
+            self.content = ContenidoFalso(datos)
+
+    class ContextoLogs:
+        """`_query` de aiodocker devuelve esto, y el servicio lo usa con `async with`."""
+
+        def __init__(self, endpoint: str, **kwargs) -> None:
+            self._datos = logs_por_contenedor.get(endpoint, b"")
+
+        async def __aenter__(self) -> RespuestaLogs:
+            return RespuestaLogs(self._datos)
+
+        async def __aexit__(self, *_exc) -> bool:
+            return False
+
+    def fake_query(endpoint: str = "", **_k):
+        return ContextoLogs(endpoint)
+
+    mock._query = fake_query
+    mock.logs_por_contenedor = logs_por_contenedor
+    mock.multiplexed_logs = FakeDockerContainer.multiplexed_logs
     mock.close = AsyncMock()
     return mock
 

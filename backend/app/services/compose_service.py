@@ -276,6 +276,12 @@ def _to_summary(index: _Index, name: str) -> ComposeProjectSummary:
     volumes_count = len(entry["volumes"])
     return ComposeProjectSummary(
         name=name,
+        # El cubo `""` (contenedores sin `com.docker.compose.service`) NO es un
+        # servicio: el contenedor cuenta en `containers_total` y en
+        # `containers_running`, pero no como servicio. Por eso se filtra aquí y
+        # `services_count` no lo incluye. El detalle (`_services`) sí lo lista,
+        # etiquetado como "sin etiqueta de servicio", porque esos contenedores
+        # existen y hidinglos sería peor que contarlos aparte.
         services_count=len([s for s in services if s]),
         containers_total=containers_total,
         containers_running=running,
@@ -291,6 +297,14 @@ def _to_summary(index: _Index, name: str) -> ComposeProjectSummary:
 
 
 def _services(index: _Index, project: str) -> list[ComposeService]:
+    """Los servicios del proyecto, ordenados por nombre.
+
+    Incluye el cubo `""` de los contenedores sin etiqueta de servicio, con el
+    nombre vacío. No es un servicio —`services_count` no lo cuenta— pero sus
+    contenedores pertenecen al proyecto y desaparecerían del detalle, que es
+    peor que mostrarlos con el nombre vacío que la UI ya sabe pintar como
+    "(sin etiqueta de servicio)".
+    """
     entry = index.projects[project]
     services: list[ComposeService] = []
     for name in sorted(entry["services"]):

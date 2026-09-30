@@ -31,8 +31,6 @@ networks:
 interface ComposeEditorProps {
   value: string
   onChange: (value: string) => void
-  /** Contenido original del disco, para avisar de que hay cambios sin guardar. */
-  original?: string
 }
 
 /**
@@ -41,10 +39,17 @@ interface ComposeEditorProps {
  * Existe para **probar un cambio y ver el plan que produce**, no para
  * reemplazar el archivo: el panel no escribe en el disco del usuario. Por eso no
  * hay botón de guardar, y el texto lo dice (SPEC-12 §1).
+ *
+ * No lleva indicador de "editado" contra el original, y es deliberado: este
+ * editor **nunca carga el contenido del disco**, porque leerlo aquí abriría una
+ * segunda vía de lectura aparte del plan (SPEC-14 §3.3) y sin límite de tamaño
+ * propio. Sin el contenido del disco no hay contra qué comparar, así que una
+ * insignia "editado" compararía el texto contra sí mismo.
+ *
+ * El aviso de que hay cambios sin guardar vive en `ComposePlanModal`, junto al
+ * botón de desplegar que de verdad depende de ello, y no dentro del editor.
  */
-export function ComposeEditor({ value, onChange, original }: ComposeEditorProps) {
-  const editado = original !== undefined && value !== original
-
+export function ComposeEditor({ value, onChange }: ComposeEditorProps) {
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="flex items-center justify-between gap-2 mb-1.5">
@@ -56,14 +61,6 @@ export function ComposeEditor({ value, onChange, original }: ComposeEditorProps)
           Contenido
         </label>
         <div className="flex items-center gap-2">
-          {editado && (
-            <span
-              data-testid="editor-dirty"
-              className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/20"
-            >
-              editado
-            </span>
-          )}
           <button
             type="button"
             onClick={() => onChange(EJEMPLO)}

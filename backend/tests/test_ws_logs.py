@@ -45,8 +45,21 @@ class FakeWebSocket:
 
 
 @pytest.mark.asyncio
-async def test_rest_logs_snapshot(async_client: AsyncClient):
-    """GET /api/v1/containers/{id}/logs obtiene snapshot de logs."""
+async def test_rest_logs_snapshot(async_client: AsyncClient, mock_docker):
+    """GET /api/v1/containers/{id}/logs obtiene snapshot de logs.
+
+    El snapshot va por el mismo camino desmultiplexado que el stream en vivo,
+    así que el doble tiene que servir frames de cable y no líneas sueltas.
+    """
+    mock_docker.logs_por_contenedor["containers/c123/logs"] = (
+        mock_docker.multiplexed_logs(
+            [
+                (1, "2026-09-25T12:00:01.000000000Z Server initializing...\n"),
+                (2, "ERROR: algo fallo\n"),
+                (1, "2026-09-25T12:00:03.000000000Z [warn] High connection volume\n"),
+            ]
+        )
+    )
     response = await async_client.get("/api/v1/containers/c123/logs?tail=10")
     assert response.status_code == 200
     data = response.json()
@@ -56,6 +69,9 @@ async def test_rest_logs_snapshot(async_client: AsyncClient):
     assert len(data["lines"]) == 3
     assert data["lines"][0]["stream"] in ["stdout", "stderr"]
     assert "Server initializing" in data["lines"][0]["message"]
+    # El stream viene del byte de cabecera: la segunda línea es stderr aunque
+    # no lleve marca, y eso el snapshot y el stream en vivo cuentan igual.
+    assert [linea["stream"] for linea in data["lines"]] == ["stdout", "stderr", "stdout"]
 
 
 @pytest.mark.asyncio
@@ -65,8 +81,21 @@ async def test_rest_logs_not_found(async_client: AsyncClient):
     assert response.status_code == 404
 
 
-def test_ws_logs_stream_success(test_client: TestClient):
-    """Escenario: Conexión WebSocket y streaming de logs."""
+def test_ws_logs_stream_success(test_client: TestClient, mock_docker):
+    """Escenario: Conexión WebSocket y streaming de logs.
+
+    El doble sirve los logs en el formato multiplexado de Docker, que es lo que
+    lee el servicio: sin cabecera `>BxxxL` no se puede saber de qué stream salió
+    cada línea.
+    """
+    mock_docker.logs_por_contenedor["containers/c123/logs"] = (
+        mock_docker.multiplexed_logs(
+            [
+                (1, "2026-09-25T12:00:01.000000000Z Server initializing...\n"),
+                (1, "2026-09-25T12:00:02.000000000Z [info] Listening on 0.0.0.0:80\n"),
+            ]
+        )
+    )
     with test_client.websocket_connect("/ws/containers/c123/logs?tail=10") as ws:
         # Primer mensaje debe ser mensaje del sistema indicando conexión
         first_msg = ws.receive_json()
@@ -105,42 +134,56 @@ async def test_cerrar_la_vista_libera_el_stream(mock_docker):
     from app.api.v1.ws import container_logs_ws
 
     cerrado = asyncio.Event()
-    logs_emitidos = asyncio.Event()
 
-    class StreamColgado:
-        """Como un contenedor parado: emite tres líneas y luego no termina."""
+    class ContenidoColgado:
+        """Como un contenedor parado: entrega los frames y luego no termina."""
 
-        def __init__(self) -> None:
+        def __init__(self, datos: bytes) -> None:
+            self._datos = datos
+            self._pos = 0
             self.cerrado = False
 
-        def __aiter__(self):
-            return self
-
-        async def __anext__(self):
-            logs_emitidos.set()
-            await asyncio.Event().wait()  # nunca entrega nada más
-            raise StopAsyncIteration
-
-        async def aclose(self) -> None:
-            self.cerrado = True
+        async def readexactly(self, n: int) -> bytes:
+            if self._pos + n <= len(self._datos):
+                trozo = self._datos[self._pos : self._pos + n]
+                self._pos += n
+                return trozo
             cerrado.set()
+            await asyncio.Event().wait()  # nunca entrega nada más
+            raise AssertionError("no debería llegar aquí")
 
-    stream = StreamColgado()
-    contenedor = await mock_docker.containers.get("c123")
-    contenedor.log = lambda **_kw: stream
+        async def iter_any(self):
+            raise AssertionError("con TTY=False se leen cabeceras, no trozos")
+
+    class Respuesta:
+        def __init__(self, datos: bytes) -> None:
+            self.content = ContenidoColgado(datos)
+
+    class Contexto:
+        async def __aenter__(self) -> Respuesta:
+            return Respuesta(
+                mock_docker.multiplexed_logs([(1, "primera\n"), (1, "segunda\n")])
+            )
+
+        async def __aexit__(self, *_exc) -> bool:
+            cerrado.set()
+            return False
+
+    mock_docker._query = lambda *_a, **_k: Contexto()
 
     socket = FakeWebSocket()
     tarea = asyncio.create_task(
         container_logs_ws(mock_docker, socket, "c123", tail=10, timestamps=True, follow=True)
     )
-    await asyncio.wait_for(logs_emitidos.wait(), timeout=2)
+    await asyncio.wait_for(
+        asyncio.sleep(0.05), timeout=1
+    )  # deja que el handler se monte y lea
 
     # El cliente se va: es el `receive()` del vigía lo que lo debe notar.
     socket.encolar_desconexion()
     await asyncio.wait_for(cerrado.wait(), timeout=2)
     await asyncio.wait_for(tarea, timeout=2)
 
-    assert stream.cerrado is True
     assert socket.abierta is False
 
 
@@ -149,6 +192,15 @@ async def test_logs_seguidos_llegan_completos(mock_docker):
     """El refactor de tareas no pierde ni reordena ninguna línea."""
     from app.api.v1.ws import container_logs_ws
 
+    mock_docker.logs_por_contenedor["containers/c123/logs"] = (
+        mock_docker.multiplexed_logs(
+            [
+                (1, "2026-09-25T12:00:01.000000000Z Server initializing...\n"),
+                (1, "2026-09-25T12:00:02.000000000Z [info] Listening on 0.0.0.0:80\n"),
+            ]
+        )
+    )
+
     socket = FakeWebSocket()
     await container_logs_ws(mock_docker, socket, "c123", tail=10, timestamps=True, follow=True)
 
@@ -156,3 +208,63 @@ async def test_logs_seguidos_llegan_completos(mock_docker):
     assert mensajes[0]["stream"] == "system"
     assert "Server initializing" in mensajes[1]["message"]
     assert "Listening on" in mensajes[2]["message"]
+
+
+# --- El stream viene del byte de cabecera, no del texto -------------------------
+
+
+@pytest.mark.asyncio
+async def test_el_stream_de_cada_linea_viene_del_frame_de_docker(mock_docker):
+    """stdout y stderr se leen del byte de cabecera, no se adivinan.
+
+    aiodocker tira ese byte al desmultiplexar, así que la vía que usa el visor
+    tenía que adivinar por el texto y arrastraba a stderr cualquier línea de
+    stdout que empezara por "Error". Con el byte no hay duda: la tercera línea de
+    este test empieza por "Error" y es stdout de verdad.
+    """
+    from app.services.container_service import ContainerService
+
+    mock_docker.logs_por_contenedor["containers/c123/logs"] = (
+        mock_docker.multiplexed_logs(
+            [
+                (1, "2026-09-25T12:00:01.000000000Z normal\n"),
+                (2, "ERROR: algo fallo\n"),
+                (1, "2026-09-25T12:00:03.000000000Z Error handled gracefully\n"),
+                (2, "aviso sin marca y sin mayusculas\n"),
+            ]
+        )
+    )
+
+    entradas = [
+        e async for e in ContainerService.stream_logs(mock_docker, "c123", follow=True)
+    ]
+
+    assert [(e.stream, e.message) for e in entradas] == [
+        ("stdout", "normal"),
+        ("stderr", "ERROR: algo fallo"),
+        # La trampa del heurístico: empieza por "Error" y es stdout de verdad.
+        ("stdout", "Error handled gracefully"),
+        # Y al revés: sin mayúscula ni dos puntos, y es stderr de verdad.
+        ("stderr", "aviso sin marca y sin mayusculas"),
+    ]
+    assert entradas[0].timestamp == "2026-09-25T12:00:01.000000000Z"
+
+
+@pytest.mark.asyncio
+async def test_una_linea_partida_entre_frames_no_se_trocea(mock_docker):
+    """Un frame puede traer una línea a medias; el buffer la reengancha."""
+    import struct
+
+    trozo = "primera parte y "
+    resto = "segunda parte\n"
+    crudo = struct.pack(">BxxxL", 1, len(trozo.encode())) + trozo.encode()
+    crudo += struct.pack(">BxxxL", 2, len(resto.encode())) + resto.encode()
+    mock_docker.logs_por_contenedor["containers/c123/logs"] = crudo
+
+    from app.services.container_service import ContainerService
+
+    entradas = [
+        e async for e in ContainerService.stream_logs(mock_docker, "c123", follow=True)
+    ]
+
+    assert [e.message for e in entradas] == ["primera parte y segunda parte"]

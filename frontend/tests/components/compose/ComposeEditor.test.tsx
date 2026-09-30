@@ -30,16 +30,18 @@ describe('ComposeEditor', () => {
     expect(screen.getByText(/no se guarda/i)).toBeInTheDocument()
   })
 
-  it('informa de si el contenido está editado respecto al original', () => {
-    const { rerender } = render(
-      <ComposeEditor value="original" original="original" onChange={vi.fn()} />
-    )
-    expect(screen.queryByTestId('editor-dirty')).not.toBeInTheDocument()
+  it('no ofrece insignia de "editado" contra un original que no tiene', () => {
+    // El editor nunca carga el contenido del disco: hacerlo abriría una segunda
+    // vía de lectura sin límite de tamaño propio (SPEC-14 §3.3). Una insignia
+    // "editado" compararía el texto contra sí mismo, así que no existe. El
+    // aviso real vive en `ComposePlanModal`, junto al botón que depende de él.
+    render(<ComposeEditor value="services: {}" onChange={vi.fn()} />)
 
-    rerender(
-      <ComposeEditor value="cambiado" original="original" onChange={vi.fn()} />
-    )
-    expect(screen.getByTestId('editor-dirty')).toBeInTheDocument()
+    expect(screen.queryByTestId('editor-dirty')).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/no se guarda/i),
+      'el editor debe seguir diciendo que no guarda'
+    ).toBeInTheDocument()
   })
 
   it('permite insertar una ruta de ejemplo', () => {

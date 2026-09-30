@@ -65,3 +65,66 @@ def test_ws_terminal_clean_exit(test_client: TestClient):
                 websocket.receive_text()
         except WebSocketDisconnect as exc:
             assert exc.code in [1000, 1001]
+
+
+# --- El exec no muere con la conexión ----------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_se_avisa_si_el_exec_sobrevive(mock_docker, caplog):
+    """Un exec con TTY sobrevive al cierre, y hay que enterarse.
+
+    El proceso de un exec no está atado a la conexión hijackeada: cerrarla no lo
+    mata. Sin TTY el EOF de la entrada estándar hace salir a `/bin/sh`, pero con
+    `tty=True` —que es lo que mandan casi todos los clientes de terminal— el
+    shell no ve ese EOF y se queda. Docker no expone ninguna API para matarlo,
+    así que lo único honesto es detectarlo y decirlo, en vez de fingir que el
+    cierre lo limpia.
+    """
+    import logging
+
+    from app.api.v1.ws import _avisar_si_el_exec_sobrevive
+
+    contenedor = await mock_docker.containers.get("c123")
+    exec_instance = await contenedor.exec(cmd=["/bin/bash"])
+
+    with caplog.at_level(logging.WARNING):
+        await _avisar_si_el_exec_sobrevive(exec_instance, "web-app", "/bin/bash")
+
+    assert exec_instance.inspect_called == 1
+    assert any("sigue vivo" in r.message for r in caplog.records)
+    assert any("Docker no tiene API para matarlo" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_no_se_avisa_si_el_exec_ya_murio(mock_docker, caplog):
+    """Sin TTY el shell sale con el EOF: no hay nada que avisar."""
+    import logging
+
+    from app.api.v1.ws import _avisar_si_el_exec_sobrevive
+
+    contenedor = await mock_docker.containers.get("c123")
+    exec_instance = await contenedor.exec(cmd=["/bin/sh"], tty=False)
+    assert exec_instance.running is False
+
+    with caplog.at_level(logging.WARNING):
+        await _avisar_si_el_exec_sobrevive(exec_instance, "web-app", "/bin/sh")
+
+    assert caplog.records == []
+
+
+@pytest.mark.asyncio
+async def test_un_inspect_que_falla_no_afirma_nada(caplog):
+    """Si no se puede preguntar, no se puede afirmar: no es motivo para tumbar el cierre."""
+    import logging
+
+    from app.api.v1.ws import _avisar_si_el_exec_sobrevive
+
+    class ExecRoto:
+        async def inspect(self):
+            raise RuntimeError("daemon caído")
+
+    with caplog.at_level(logging.WARNING):
+        await _avisar_si_el_exec_sobrevive(ExecRoto(), "web-app", "/bin/sh")
+
+    assert caplog.records == []

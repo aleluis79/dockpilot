@@ -274,7 +274,16 @@ export function ComposePlanModal({
                 id="compose-path"
                 type="text"
                 value={path}
-                onChange={(e) => setPath(e.target.value)}
+                onChange={(e) => {
+                  const siguiente = e.target.value
+                  setPath(siguiente)
+                  // El plan es del archivo que se validó, no del que ahora dice
+                  // el campo: sin esto, validar `/a/dc.yml`, retipear `/b/dc.yml`
+                  // y pulsar Desplegar ejecutaría `/a` mientras la interfaz
+                  // anuncia `/b`. El preview que se ve y lo que se despliega no
+                  // pueden discrepar (SPEC-12 §3.1).
+                  if (siguiente !== path) setPlan(null)
+                }}
                 placeholder="/home/usuario/proyectos/mi-app/docker-compose.yml"
                 spellCheck={false}
                 className="w-full px-2.5 py-1.5 text-xs font-mono bg-inset border border-default rounded-lg text-fg placeholder-fg-subtle focus:outline-none focus:border-blue-500/50"

@@ -113,6 +113,10 @@ Cinco obligaciones, implementadas y con test:
 | `stdin=DEVNULL` | `_crear_proceso()` |
 | Proceso muerto en **todos** los caminos de salida | `_matar()` (síncrono) + `_terminar()` |
 
+Esa última obligación **no tiene equivalente posible en el exec de la terminal**, y conviene saberlo antes de intentar: el proceso de un `exec` de Docker **no está atado** a la vida de la conexión hijackeada, y Docker **no expone ninguna API para matarlo** (no hay `DELETE /exec/{id}`, y `resize` no mata). Cerrar el stream manda `write_eof()`, y con `/bin/sh` y `tty=False` eso basta porque el shell sale al recibir el EOF; con `tty=True` —o con `?shell=/bin/bash`, que es lo que mandan casi todos los clientes de terminal— no lo ve y sobrevive a cada pestaña cerrada.
+
+`_avisar_si_el_exec_sobrevive()` hace lo único honesto: `Exec.inspect()` y, si `Running` sigue a `True`, un `logger.warning` que lo dice. Preferible a fingir que el cierre lo limpia, y desde luego preferible a un silencio que acumula execs huérfanos en el contenedor sin que nada lo mencione.
+
 SPEC-13 amplía el runner con un **modo streaming** sobre el mismo núcleo, no un segundo camino. Cuatro cosas que no son evidentes:
 
 - **El servicio va como argumento POSICIONAL.** Compose v2 no tiene `--service` (`unknown flag: --service`); `stop`, `logs` y `pull` lo toman posicional. Y a diferencia del preview, las acciones **no** llevan `--profile`: un `up` debe arrancar el perfil por defecto, no todos.
@@ -184,6 +188,26 @@ Tres reglas que salen de ahí:
 - **Lo mismo para un formulario**: `CreateContainerModal` vive montado, así que imagen, puertos y variables del intento anterior se reenviaban con el botón ya habilitado. Se resetea en un efecto que reacciona a `isOpen === false`, con cuidado de **no** pisar la imagen preestablecida por el padre (`initialImage`), que viene de pulsar "crear desde esta imagen" en la tabla.
 
 `NetworkDetailModal` ya lo hacía bien con `setDetail(null)`, y esa asimetría era la pista.
+
+Relacionado: **un plan o un preview pertenece al archivo que se validó, no al que ahora dice el campo de ruta.** `ComposePlanModal` lo borraba al elegir con el explorador pero no al escribir la ruta a mano, así que validar `/a/dc.yml`, retipear `/b/dc.yml` y pulsar Desplegar ejecutaba `/a` mientras la interfaz anunciaba `/b`. El preview que se ve y lo que se ejecuta no pueden discrepar.
+
+Y **una insignia que ningún llamador puede activar es código muerto**: `ComposeEditor` tenía un badge de "editado" contra un prop `original` que `ComposePlanModal` nunca pasaba, así que la rama era inalcanzable. Se quitó en vez de darle una semántica nueva, porque el editor **nunca carga el contenido del disco** (leerlo aquí abriría una segunda vía de lectura sin límite de tamaño propio, SPEC-14 §3.3) y sin el original no hay contra qué comparar. El aviso de verdad vive en `ComposePlanModal`, junto al botón de desplegar que depende de él.
+
+#### Trampa: aiodocker tira el byte de stream de los logs
+
+Docker multiplexa stdout y stderr en un solo stream con una cabecera de 8 bytes por frame: `>BxxxL`, donde **el primer byte ES el stream** y los cuatro últimos su longitud. aiodocker lo lee con `_, length = struct.unpack(">BxxxL", header)` y **descarta ese byte** (`MultiplexedResult.fetch`), así que con `container.log()` no hay forma de saber de qué stream salió una línea.
+
+La consecuencia era que el stream se adivinaba por el texto: `error` o `fatal` en los primeros caracteres, lo que arrastraba a stderr cualquier línea de stdout que empezara por "Error" y la sacaba del filtro del visor. Endurecer el patrón sólo cambiaba *qué* frases se confundían.
+
+`container_service._stream_demultiplexado()` lee el stream por la vía cruda (`docker._query`) y devuelve `(stream, línea)` con el byte real. El snapshot REST y el WebSocket usan **los dos** el mismo camino, porque si uno contara por el byte y el otro por el texto, una línea cambiaría de stream a mitad de la vista.
+
+Detalles que no son evidentes:
+
+- **El buffer no se reparte por stream.** Si una línea se parte entre un frame de stdout y otro de stderr, es la misma línea; cortarla por stream la trocearía en dos. Se acumula un único buffer y se corta por `\n`.
+- **Con `tty=True` no hay cabecera**: sale todo por stdout, y es el caso `raw` de aiodocker. Se detecta por el `Config.Tty` del contenedor.
+- **El doble de test tiene que emitir la cabecera de verdad** (`struct.pack(">BxxxL", ...)`). Un doble que devuelve líneas sueltas deja el stream en `None`, todo se marca stdout y los tests pasan sin haber tocado el camino real.
+
+Es la única parte del backend que **no** usa los métodos de `DockerContainer`, a propósito: `MultiplexedResult` descarta el byte y no hay forma de recuperarlo por debajo. El proyecto ya usa primitivas internas de aiodocker en otros sitios (`_query_json` para redes y para `/system/df`), así que no es una excepción nueva.
 
 #### Trampa: un búfer de stream sin tope no es sólo memoria
 

@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import asyncio
-import inspect
 import json
+import logging
 import shlex
 import time
+from collections.abc import AsyncIterator
 from contextlib import aclosing
 from typing import Annotated, Any
 
@@ -19,14 +20,17 @@ from app.schemas.compose import (
     ComposeOutput,
 )
 from app.schemas.image import ImagePullMessage
+from app.schemas.log import LogEntry
 from app.services import compose_cli, compose_service
-from app.services.container_service import parse_docker_log_line
+from app.services.container_service import ContainerService
 from app.services.image_service import ImageService, normalize_image_ref, pull_error_code
 from app.services.stats_service import StatsService
 
 DockerDep = Annotated[aiodocker.Docker, Depends(get_docker)]
 
 router = APIRouter(prefix="/ws", tags=["websockets"])
+
+logger = logging.getLogger(__name__)
 
 
 @router.websocket("/containers/{container_id}/logs")
@@ -68,18 +72,25 @@ async def container_logs_ws(
         return
 
     try:
-        res = container.log(
-            stdout=True, stderr=True, follow=follow, tail=tail, timestamps=timestamps
-        )
-        stream = await res if inspect.iscoroutine(res) else res
+        # `stream_logs` demultiplexa el stream de Docker y devuelve el stream de
+        # cada línea. Antes este handler llamaba a `container.log()` y adivinaba
+        # el stream por el texto, porque aiodocker tira el byte de cabecera: una
+        # línea normal de stdout que empezara por "Error" acababa en el filtro
+        # de stderr y desaparecía de la vista de stdout.
+        #
         # Ni `receive()` ni `aclosing`, y el handler se quedaba dormido para
         # siempre: Starlette sólo se entera de que el cliente se fue cuando
-        # alguien llama a `receive()`, y sin `aclosing` el `ClientResponse` de
-        # aiodocker no se suelta hasta que pase el finalizador del bucle de
-        # eventos. Con un contenedor parado o inactivo, cerrar la vista
-        # consumía una conexión del connector para siempre.
+        # alguien llama a `receive()`. Con un contenedor parado o inactivo, cerrar
+        # la vista consumía una conexión del connector para siempre.
+        #
+        # El generador se crea aquí y no dentro de la tarea porque es él quien
+        # tiene el `async with` de la respuesta: cerrarlo es lo que suelta el
+        # socket, y eso hay que poder hacerlo desde el `finally`.
+        logs = ContainerService.stream_logs(
+            docker, container_id, tail=tail, timestamps=timestamps, follow=follow
+        )
         envio = asyncio.create_task(
-            _ws_enviar_logs(websocket, stream, timestamps), name=f"logs-{container_id}"
+            _ws_enviar_logs(websocket, logs), name=f"logs-{container_id}"
         )
         vigia = asyncio.create_task(
             _ws_vigilar_desconexion(websocket), name=f"logs-vigia-{container_id}"
@@ -91,7 +102,10 @@ async def container_logs_ws(
             for tarea in (envio, vigia):
                 tarea.cancel()
             await asyncio.gather(envio, vigia, return_exceptions=True)
-            await _cerrar_stream(stream)
+            # Cerrar el generador tira el `GeneratorExit` dentro y su `async with`
+            # devuelve la respuesta de Docker. Sin esto, el socket se queda
+            # cogido hasta que pase el finalizador del bucle de eventos.
+            await _cerrar_stream(logs)
     except WebSocketDisconnect:
         # Desconexión limpia del cliente web
         pass
@@ -113,13 +127,14 @@ async def container_logs_ws(
             pass
 
 
-async def _ws_enviar_logs(
-    websocket: WebSocket, stream: Any, timestamps: bool
-) -> None:
-    """Pasa el stream de logs de Docker al socket, línea a línea."""
-    async for line in stream:
-        entry = parse_docker_log_line(line, timestamps=timestamps)
-        await websocket.send_json(entry.model_dump())
+async def _ws_enviar_logs(websocket: WebSocket, logs: AsyncIterator[LogEntry]) -> None:
+    """Pasa el stream de logs de Docker al socket, línea a línea.
+
+    Cada `LogEntry` ya viene con su stream resuelto del byte de cabecera de
+    Docker, así que aquí no se adivina nada a partir del texto.
+    """
+    async for entrada in logs:
+        await websocket.send_json(entrada.model_dump())
 
 
 async def _ws_vigilar_desconexion(websocket: WebSocket) -> None:
@@ -419,14 +434,56 @@ async def container_terminal_ws(
         # El canal de compose, doscientos líneas más abajo, sí hace este gather.
         await asyncio.gather(*pending, return_exceptions=True)
     finally:
+        # `stream.close()` hace `write_eof()` + `resp.close()`. El EOF en la
+        # entrada estándar es lo que mata a un `/bin/sh` sin TTY, así que la
+        # mayoría de las veces el proceso se va solo.
         try:
             await stream.close()
         except Exception:
             pass
+        await _avisar_si_el_exec_sobrevive(exec_instance, c_name, shell)
         try:
             await websocket.close(code=1000)
         except Exception:
             pass
+
+
+async def _avisar_si_el_exec_sobrevive(
+    exec_instance: Any, container: str, shell: str
+) -> None:
+    """Comprueba si el proceso del exec murió al cerrar la sesión.
+
+    El proceso de un `exec` **no** está atado a la vida de la conexión hijackeada:
+    cerrarla no lo mata. Con `/bin/sh` y `tty=False` el EOF de la entrada
+    estándar hace que salga, pero con `tty=True` —o con `?shell=/bin/bash`, que es
+    lo que mandan casi todos los clientes de terminal— el shell no ve ese EOF y
+    sobrevive a cada pestaña cerrada.
+
+    Docker **no expone ninguna API para matar un exec**: no hay `DELETE
+    /exec/{id}`, y `resize` no mata. Lo único disponible es enterarse, y no
+    fingir lo contrario: sin este aviso, un exec huérfano se acumula en el
+    contenedor sin que nada lo mencione.
+    """
+    try:
+        await asyncio.sleep(0.1)
+        estado = await exec_instance.inspect()
+    except Exception:
+        # Si ni siquiera se puede preguntar, no se puede afirmar nada. No es un
+        # motivo para tumbar el cierre del socket, que ya está limpio.
+        return
+
+    if not estado.get("Running"):
+        return
+
+    exit_code = estado.get("ExitCode")
+    logger.warning(
+        "El exec de la terminal de %s (%s) sigue vivo tras cerrar la sesión "
+        "(ExitCode=%s). Docker no tiene API para matarlo: hay que pararlo desde "
+        "dentro del contenedor.",
+        container,
+        shell,
+        exit_code,
+    )
 
 
 
