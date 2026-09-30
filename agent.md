@@ -235,6 +235,29 @@ Y la decisión de UI que más se nota: **sin healthcheck no se pinta nada**. De 
 
 El filtro de salud va **en el navegador**, no en el daemon, por el mismo motivo que el de estado: los contadores de las píldoras son un censo del host y pedirle al daemon sólo los `unhealthy` los haría bailar. El parámetro `?health=` sí existe en la API porque es la superficie correcta para quien la llame directamente.
 
+#### Renombrar: hay un validador de redes y NO sirve (SPEC-19)
+
+Docker acepta el rename con `POST /containers/{id}/rename`, y es **barato**: no hay recreate, así que el id, el estado y los volúmenes no cambian, y como el panel identifica por id ninguna WebSocket se rompe. Lo que **no** se puede modificar son los puertos: `POST /containers/{id}/update` acepta `PortBindings`, devuelve `{"Warnings": null}` y **no cambia nada**. Si alguna vez se implementa "modificar puertos" con `update`, la UI confirmará un cambio que no ocurrió.
+
+Las reglas del nombre se midieron contra el daemon y son tres, y **el validador de redes no sirve**:
+
+| | Redes | Contenedores |
+| :--- | :--- | :--- |
+| Patrón | `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$` (`*`) | `^[a-zA-Z0-9][a-zA-Z0-9_.-]+$` (`+`) |
+| Mínimo | 1 carácter | **2 caracteres** |
+| Longitud máxima | 63 (la impone el daemon) | **el daemon no impone ninguna** (aceptó 300) |
+
+Mismo comienzo, aridad distinta: `network_service.NAME_PATTERN` con `*` **acepta un nombre de un carácter que Docker rechaza**. El de contenedores es propio (`_validar_nombre_contenedor` y `utils/containerName.ts`, que son copia deliberada: el backend valida porque es la frontera, el cliente valida para que sea instantáneo).
+
+Y el `MAX_NOMBRE = 63` del panel es **una decisión propia**: los contenedores no tienen tope en el daemon, pero 63 es lo que usa una etiqueta DNS, y un nombre más largo no puede resolver en una red personalizada.
+
+Dos cosas que se creían buenas y no lo eran:
+
+- **`HostConfig.NetworkMode` no sirve para saber si el nombre es un nombre DNS.** Es sólo la red *principal*: un contenedor en `bridge` conectado además a una red propia sigue diciendo `bridge`, que es justo el caso en el que el nombre sí resuelve. Hay que mirar el conjunto de `NetworkSettings.Networks` (`redPropia()` en el cliente).
+- **Bloquear contenedores de compose era una restricción inventada.** Compose los identifica por **etiquetas**, no por nombre: `up` sigue idempotente, `down` los borra bien, y también funciona con `container_name:` explícito. Comprobado montando un proyecto de prueba, no de palabra.
+
+El `409` del daemon trae el id del contenedor que ocupa el nombre, que el usuario nunca ve; se traduce a "Ya existe un contenedor llamado 'x'". Y la prevalidación de unicidad compara contra el inventario ya cargado, que sabe los nombres sin llamar al daemon: el `409` sigue siendo la verdad, pero es el caso raro.
+
 #### Trampa: un búfer de stream sin tope no es sólo memoria
 
 El visor de logs de contenedor corta a 2000 entradas. El de compose **no cortaba nada**, y `ComposeLogsViewer` vuelve a trocear el historial entero en cada fragmento: un `logs --follow` de un servicio que parlaba mucho se convertía en O(n²) de CPU además de un heap sin límite.
@@ -296,6 +319,7 @@ dockpilot/
 │   ├── 15-compose-deploy-from-plan.md # Spec: Desplegar un compose file desde el plan (up, coste de build)
 │   ├── 16-host-census-dashboard.md  # Spec: Panel de censo del host con barras apiladas
 │   ├── 18-container-healthchecks.md  # Spec: Salud del healthcheck en listado, detalle y filtro
+│   ├── 19-container-rename.md       # Spec: Renombrar un contenedor desde su detalle
 │   └── 16-host-census-dashboard.md # Spec: Dashboard de censo del host (barras, paleta de gráfico)
 ├── backend/
 │   ├── app/
@@ -326,7 +350,7 @@ dockpilot/
 │   │   │   ├── compose_cli.py      # ÚNICO módulo que lanza procesos (SPEC-12)
 │   │   │   ├── compose_service.py  # Inventario (SPEC-11), build_plan (SPEC-12) y el confinamiento
 │   │   │                      # de rutas que comparten browse, plan y ciclo de vida (SPEC-14)
-│   │   │   ├── container_service.py
+│   │   ├── container_service.py
 │   │   │   ├── image_service.py
 │   │   │   ├── network_service.py
 │   │   │   ├── stats_service.py
@@ -377,7 +401,8 @@ dockpilot/
 │   │   ├── services/              # dockerApi.ts, wsUrl.ts
 │   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts, volume.ts, network.ts, system.ts, compose.ts
 │   │   ├── utils/                 # format.ts (formatBytes, formatPercent), compose.ts (rutaDeProyecto),
-│   │   │                         # buffer.ts (acumular: búfer acotado para streams)
+│   │   │                         # buffer.ts (acumular: búfer acotado para streams),
+│   │   │                         # containerName.ts (reglas de nombre de contenedor, SPEC-19)
 │   │   ├── App.tsx
 │   │   ├── main.tsx
 │   │   └── index.css              # Tokens de tema (@theme inline + @custom-variant dark)

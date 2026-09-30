@@ -38,6 +38,7 @@ function App() {
     setSearchQuery,
     actionInProgress,
     refetch,
+    renameLocal,
     executeAction,
   } = useContainers({ activo: activeView === 'containers' })
 
@@ -253,6 +254,17 @@ function App() {
       <ContainerDetailModal
         container={selectedContainer}
         onClose={() => setSelectedContainer(null)}
+        // La prevalidación de unicidad compara contra el inventario cargado, así
+        // que no hace falta un viaje al daemon para saber si el nombre existe.
+        otrosNombres={rawContainers
+          .filter((c) => c.id !== selectedContainer?.id)
+          .map((c) => c.name)}
+        onRenamed={(id, anterior, nuevo) => {
+          renameLocal(id, anterior, nuevo)
+          // El `selectedContainer` es una copia del inventario: si no se actualiza
+          // también, al reabrir el detalle volvería el nombre viejo.
+          setSelectedContainer((c) => (c && c.id === id ? { ...c, name: nuevo } : c))
+        }}
       />
 
       {/* Modal de Logs en Vivo */}

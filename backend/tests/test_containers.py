@@ -421,3 +421,219 @@ async def test_la_api_expone_la_salud_en_listado_y_detalle(async_client: AsyncCl
     assert len(salud["log"]) == 3
     assert salud["log"][0]["exit_code"] == 1
     assert salud["test"] == ["CMD-SHELL", "pg_isready -U postgres"]
+
+
+# --- Renombrar un contenedor (SPEC-19) -----------------------------------------
+#
+# Todas las reglas se midieron contra el daemon 29.8.1 antes de escribir el spec.
+
+
+@pytest.mark.asyncio
+async def test_renombrar_devuelve_el_nombre_anterior_y_el_nuevo(mock_docker):
+    from app.services.container_service import ContainerService
+
+    respuesta = await ContainerService.rename_container(mock_docker, "c123", "api-gateway")
+
+    # El panel necesita el anterior para sustituir el nombre en todas partes; sin
+    # él tendría que suponerlo, y la suposición se nota en la UI.
+    assert respuesta.old_name == "web-app"
+    assert respuesta.new_name == "api-gateway"
+    assert respuesta.id == "c123"
+    assert respuesta.message
+
+
+@pytest.mark.asyncio
+async def test_renombrar_no_cambia_el_id(mock_docker):
+    """El invariante que hace la función barata: no hay recreate."""
+    from app.services.container_service import ContainerService
+
+    antes = (await mock_docker.containers.get("c123"))._as_summary_dict()["Id"]
+    await ContainerService.rename_container(mock_docker, "c123", "otro-nombre")
+    despues = (await mock_docker.containers.get("c123"))._as_summary_dict()["Id"]
+
+    assert antes == despues
+
+
+@pytest.mark.asyncio
+async def test_renombrar_un_contenedor_parado_lo_deja_parado(mock_docker):
+    from app.services.container_service import ContainerService
+
+    await ContainerService.rename_container(mock_docker, "c456", "parado-renombrado")
+
+    contenedor = await mock_docker.containers.get("c456")
+    assert contenedor._status == "exited"
+    assert contenedor._name == "/parado-renombrado"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("nombre", "motivo"),
+    [
+        ("x", "al menos dos caracteres"),
+        ("a", "al menos dos caracteres"),
+        ("mi web", "espacio"),
+        ("mi/web", "barra"),
+        ("mi:web", "dos puntos"),
+        ("", "no puede estar vacío"),
+        ("   ", "no puede estar vacío"),
+    ],
+)
+async def test_nombres_invalidos_dan_400(mock_docker, nombre, motivo):
+    """El mínimo de 2 caracteres es la trampa: el validador de REDES usa `*` y
+    aceptaría un carácter, pero Docker los rechaza. Por eso el de contenedores
+    es propio y no se reutiliza el de redes."""
+    from fastapi import HTTPException
+
+    from app.services.container_service import ContainerService
+
+    with pytest.raises(HTTPException) as exc:
+        await ContainerService.rename_container(mock_docker, "c123", nombre)
+
+    assert exc.value.status_code == 400
+    assert motivo in str(exc.value.detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_nombre_demasiado_largo_da_400(mock_docker):
+    """El daemon NO impone tope: aceptó 300 caracteres. Pero un nombre que no
+    cabe en una etiqueta DNS (63) rompe la resolución en cuanto el contenedor
+    toca una red personalizada, así que el panel pone su propio límite."""
+    from fastapi import HTTPException
+
+    from app.services.container_service import ContainerService
+
+    with pytest.raises(HTTPException) as exc:
+        await ContainerService.rename_container(mock_docker, "c123", "a" * 64)
+
+    assert exc.value.status_code == 400
+    assert "63" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_nombre_igual_al_actual_da_400(mock_docker):
+    from fastapi import HTTPException
+
+    from app.services.container_service import ContainerService
+
+    with pytest.raises(HTTPException) as exc:
+        await ContainerService.rename_container(mock_docker, "c123", "web-app")
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_el_detalle_expone_las_redes_para_poder_avisar_del_dns(mock_docker):
+    """El aviso de DNS sale del CONJUNTO de redes, no de `NetworkMode`.
+
+    `HostConfig.NetworkMode` es sólo la red **principal**: un contenedor en
+    `bridge` conectado además a una red propia sigue diciendo `bridge`, que es
+    justo el caso en el que el nombre SÍ es un nombre DNS. Por eso no hay campo
+    `network_mode` y el cliente deduce de `networks` (SPEC-19 §3.3).
+    """
+    from app.services.container_service import ContainerService
+
+    detalle = await ContainerService.get_container(mock_docker, "c123")
+    assert detalle.networks == ["bridge"], "sin las redes no se puede avisar del DNS"
+    assert not hasattr(detalle, "network_mode"), (
+        "network_mode mentiría: dice la red principal, no si tiene redes propias"
+    )
+
+
+@pytest.mark.asyncio
+async def test_renombrar_no_toca_las_etiquetas_de_compose(mock_docker):
+    """Compose identifica por etiquetas (SPEC-19 §3.4). Renombrar el contenedor
+    es una desviación que compose tolera, pero las etiquetas describen el
+    ARCHIVO y no deben cambiar."""
+    from app.services.container_service import ContainerService
+
+    await ContainerService.rename_container(mock_docker, "c123", "renombrado")
+
+    contenedor = await mock_docker.containers.get("c123")
+    assert contenedor._name == "/renombrado"
+    assert contenedor._labels == {}
+
+
+@pytest.mark.asyncio
+async def test_renombrar_uno_inexistente_da_404(mock_docker):
+    from fastapi import HTTPException
+
+    from app.services.container_service import ContainerService
+
+    with pytest.raises(HTTPException) as exc:
+        await ContainerService.rename_container(mock_docker, "no-existe", "cualquiera")
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_el_contrato_de_rename_llega_por_http(async_client: AsyncClient, mock_docker):
+    response = await async_client.post(
+        "/api/v1/containers/c123/rename", json={"name": "api-gateway"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["old_name"] == "web-app"
+    assert data["new_name"] == "api-gateway"
+    assert data["id"] == "c123"
+
+
+@pytest.mark.asyncio
+async def test_el_409_dice_el_nombre_ocupado_y_no_suelta_el_id_del_daemon(mock_docker):
+    """El daemon devuelve el id del contenedor que ocupa el nombre, que el
+    usuario no ve nunca. El mensaje propio enseña el NOMBRE y nada más."""
+    from aiodocker.exceptions import DockerError
+
+    from app.services.container_service import ContainerService
+
+    async def get_que_choca(cid):
+        c = await original_get(cid)
+
+        async def rename(nuevo):
+            raise DockerError(
+                409,
+                {
+                    "message": (
+                        'Error when allocating new name: Conflict. The container '
+                        'name "/db" is already in use by container '
+                        '"a4d168477d28800cc3980efe7fd38baf5f1a8decdd3da9f0bb07982e3a3f3f88185a33". '
+                        "You have to remove (or rename) that container to be able "
+                        "to reuse that name."
+                    )
+                },
+            )
+
+        c.rename = rename
+        return c
+
+    original_get = mock_docker.containers.get
+    mock_docker.containers.get = get_que_choca
+
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc:
+        await ContainerService.rename_container(mock_docker, "c123", "db")
+
+    assert exc.value.status_code == 409
+    assert "'db'" in str(exc.value.detail)
+    assert "a4d168477d28" not in str(exc.value.detail), "el id del daemon no debe verse"
+    assert "already in use by container" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_un_contenedor_en_red_propia_expone_su_nombre_de_red(mock_docker):
+    """El nombre de la red propia tiene que estar en `networks`."""
+    from app.services.container_service import ContainerService
+
+    contenedor = await mock_docker.containers.get("c123")
+    original = contenedor.show
+
+    async def show_en_red_propia():
+        info = await original()
+        info["NetworkSettings"]["Networks"]["mi-red"] = {"IPAddress": "172.20.0.2"}
+        return info
+
+    contenedor.show = show_en_red_propia
+
+    detalle = await ContainerService.get_container(mock_docker, "c123")
+    assert "mi-red" in detalle.networks

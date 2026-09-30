@@ -11,6 +11,8 @@ from app.schemas.container import (
     ContainerSummary,
     CreateContainerRequest,
     CreateContainerResponse,
+    RenameContainerRequest,
+    RenameContainerResponse,
 )
 from app.schemas.stats import ContainerStats
 from app.services.container_service import ContainerService
@@ -80,6 +82,22 @@ async def get_container_stats(
 ):
     """Obtiene una instantánea de las métricas de CPU, memoria, red y disco del contenedor."""
     return await StatsService.get_stats(docker=docker, container_id=container_id)
+
+
+@router.post("/{container_id}/rename", response_model=RenameContainerResponse)
+async def rename_container(
+    docker: DockerDep,
+    container_id: str,
+    payload: RenameContainerRequest,
+):
+    """Cambia el nombre del contenedor. No recrea nada: sólo cambia el nombre.
+
+    En una red personalizada el nombre **es** el nombre DNS del contenedor, así
+    que esto rompe a quien resolvía el anterior (SPEC-19).
+    """
+    return await ContainerService.rename_container(
+        docker=docker, container_id=container_id, nombre=payload.name
+    )
 
 
 @router.post("/{container_id}/start", response_model=ContainerActionResponse)

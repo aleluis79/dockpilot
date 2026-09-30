@@ -23,6 +23,7 @@ from app.schemas.container import (
     HealthProbe,
     HealthSummary,
     PortMapping,
+    RenameContainerResponse,
 )
 from app.schemas.log import LogEntry, LogSnapshotResponse
 from app.services.compose_service import compose_project_of
@@ -350,6 +351,103 @@ def _recortar(texto: str, limite: int) -> str:
     return f"{texto[:limite]}\n… ({len(texto) - limite} bytes más, recortados)"
 
 
+# --- Renombrado (SPEC-19) ------------------------------------------------------
+#
+# El validador de REDES del proyecto (`network_service.NAME_PATTERN`) usa `*` y
+# por tanto acepta un nombre de UN solo carácter. Docker los rechaza: exige
+# `[a-zA-Z0-9][a-zA-Z0-9_.-]+`, con al menos dos. Mismo comienzo, aridad
+# distinta, así que este es un validador propio y **no** una reutilización.
+
+NOMBRE_CONTENEDOR_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]+$")
+
+# 63 es lo que usa el propio daemon para redes, y es el tope de una etiqueta
+# DNS. Los contenedores no tienen tope en el daemon —comprobado: acepta 300
+# caracteres—, pero un nombre así no puede ser un nombre de host, así que rompe
+# la resolución en cuanto el contenedor toca una red personalizada (SPEC-19 §2.3).
+MAX_NOMBRE_CONTENEDOR = 63
+
+
+def _validar_nombre_contenedor(nombre: str) -> None:
+    if not nombre:
+        raise HTTPException(status_code=400, detail="El nombre no puede estar vacío")
+
+    if len(nombre) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El nombre necesita al menos dos caracteres; el daemon no acepta "
+                "un nombre de uno solo."
+            ),
+        )
+
+    if len(nombre) > MAX_NOMBRE_CONTENEDOR:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"El nombre no puede superar {MAX_NOMBRE_CONTENEDOR} caracteres. Es "
+                "el tope de un nombre de host, y un nombre más largo no podría "
+                "resolver en una red personalizada."
+            ),
+        )
+
+    if not NOMBRE_CONTENEDOR_RE.match(nombre):
+        raise HTTPException(
+            status_code=400,
+            detail=_detalle_de_nombre_invalido(nombre),
+        )
+
+
+# Cómo se llama cada carácter prohibido. Sin esto el mensaje sería la lista de
+# permitidos y el usuario tendría que buscar cuál de ellos es el suyo.
+_CARACTERES_PROHIBIDOS = {
+    " ": "espacios",
+    "/": "barras",
+    ":": "dos puntos",
+    "\\": "barras invertidas",
+    "@": "arrobas",
+    "#": "almohadillas",
+    "$": "signos de dólar",
+    "%": "signos de porcentaje",
+}
+
+
+def _detalle_de_nombre_invalido(nombre: str) -> str:
+    permitidos = "letras, dígitos, punto, guion y guion bajo, empezando por letra o dígito"
+    primer = next((c for c in nombre if not re.match(r"[a-zA-Z0-9_.-]", c)), None)
+    if primer is None:
+        # Todos los caracteres valen, así que lo que falla es el comienzo.
+        return (
+            "El nombre solo puede llevar letras, dígitos, punto, guion y guion bajo, "
+            "y debe empezar por letra o dígito."
+        )
+    return (
+        f"El nombre no puede contener {_CARACTERES_PROHIBIDOS.get(primer, repr(primer))}. "
+        f"Solo se permiten {permitidos}."
+    )
+
+
+def _nombre_del_conflicto(error: DockerError) -> str:
+    """Saca el nombre ocupado del mensaje del daemon.
+
+    El texto es `Conflict. The container name "/mi-nginx" is already in use by
+    container "a4d16..."`. La UI enseña el nombre; el id no se enseña nunca.
+    """
+    texto = docker_error_message(error)
+    coincide = re.search(r'name\s*"([^"]+)"', texto)
+    return coincide.group(1).lstrip("/") if coincide else ""
+
+
+def _nombre_actual(info: dict[str, Any]) -> str:
+    """El nombre del contenedor según su `inspect`, sin la barra inicial.
+
+    Viene de `show()` y no del objeto `DockerContainer` porque
+    `containers.get(id)` deja `_container` con sólo el id: los `Names` sólo están
+    si el objeto salió de un `list()`. Pedir el nombre al objeto sería devolver
+    cadena vacía justo en el camino del rename, que es el único que lo necesita.
+    """
+    return str(info.get("Name") or "").lstrip("/")
+
+
 class ContainerService:
     @staticmethod
     async def list_containers(
@@ -624,6 +722,75 @@ class ContainerService:
             if e.status == 404:
                 raise HTTPException(status_code=404, detail=f"Contenedor {container_id} no encontrado") from e
             raise HTTPException(status_code=docker_error_status(e), detail=docker_error_message(e)) from e
+
+    @staticmethod
+    async def rename_container(
+        docker: aiodocker.Docker, container_id: str, nombre: str
+    ) -> RenameContainerResponse:
+        """Cambia el nombre de un contenedor.
+
+        Es barato a propósito: **no hay recreate**, así que el identificador, el
+        estado y los volúmenes se quedan como están. Sólo cambia `Name`, y el
+        panel identifica los contenedores por id, de modo que ninguna WebSocket
+        abierta ni ningún enlace se rompen.
+
+        No bloquea contenedores de compose porque no hace falta: compose
+        identifica los suyos por **etiquetas**, no por nombre, y sigue
+        funcionando tras el renombrado —`up` sigue siendo idempotente y `down` lo
+        borra bien, incluso con `container_name:` explícito (SPEC-19 §3.4). Lo
+        que no se hace es tocar esas etiquetas: describen el archivo, no este
+        cambio.
+        """
+        limpio = (nombre or "").strip()
+        _validar_nombre_contenedor(limpio)
+
+        try:
+            container = await docker.containers.get(container_id)
+            anterior = _nombre_actual(await container.show())
+
+            if limpio == anterior:
+                # El daemon lo rechaza con un 400 críptico ("Renaming a container
+                # with the same name as its current name"). Merece un mensaje.
+                raise HTTPException(
+                    status_code=400, detail=f"El contenedor ya se llama '{anterior}'."
+                )
+
+            await container.rename(limpio)
+        except HTTPException:
+            raise
+        except DockerError as e:
+            if e.status == 404:
+                raise HTTPException(
+                    status_code=404, detail=f"Contenedor {container_id} no encontrado"
+                ) from e
+            if e.status == 409:
+                # El mensaje del daemon incluye el id del contenedor que ocupa el
+                # nombre, que el usuario nunca ve. Se traduce (SPEC-19 §3.5).
+                ocupado = _nombre_del_conflicto(e)
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Ya existe un contenedor llamado '{ocupado}'."
+                        if ocupado
+                        else "Ya existe un contenedor con ese nombre."
+                    ),
+                ) from e
+            if e.status == 400:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"El daemon rechazó el nombre: {docker_error_message(e)}",
+                ) from e
+            raise HTTPException(
+                status_code=docker_error_status(e),
+                detail=f"Error al renombrar el contenedor: {docker_error_message(e)}",
+            ) from e
+
+        return RenameContainerResponse(
+            id=container_id,
+            old_name=anterior,
+            new_name=limpio,
+            message=f"Contenedor renombrado a '{limpio}'",
+        )
 
     @staticmethod
     async def remove_container(

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 import asyncio
+import re
 import struct
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, MagicMock
@@ -180,6 +181,24 @@ class FakeDockerContainer:
                 "Networks": {"bridge": {"IPAddress": "172.17.0.2"}}
             },
         }
+
+    async def rename(self, newname: str) -> None:
+        # Las reglas se midieron contra el daemon 29.8.1 (SPEC-19 §2.3):
+        # `^[a-zA-Z0-9][a-zA-Z0-9_.-]+$`, mínimo 2 caracteres, único en todo
+        # el daemon. El doble acepta un nombre vacío para que sea el SERVICIO
+        # quien rechace con su mensaje propio, no el doble.
+        patron = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]+$")
+        if newname and not patron.match(newname):
+            raise DockerError(
+                400,
+                {
+                    "message": (
+                        f'Error when allocating new name: Invalid container name '
+                        f'("/{newname}"), only [a-zA-Z0-9][a-zA-Z0-9_.-]+ are allowed'
+                    )
+                },
+            )
+        self._name = f"/{newname}"
 
     async def start(self):
         self._status = "running"

@@ -80,6 +80,22 @@ class ContainerDetail(ContainerSummary):
     # un `HealthDetail` entero se serializaría como `HealthSummary` y `log` y
     # `test` desaparecerían de la respuesta sin dar ningún error (SPEC-18 §2.1).
     health: HealthDetail = Field(default_factory=HealthDetail)
+    # NO hay `network_mode`: `HostConfig.NetworkMode` es sólo la red **principal**
+    # y dice `bridge` para un contenedor que además está conectado a una red
+    # propia, que es justo el caso en el que el nombre sí es un nombre DNS. El
+    # conjunto de redes Attached ya está en `networks`, y de ahí lo deduce el
+    # cliente (SPEC-19 §3.3).
+
+
+class RenameContainerRequest(BaseModel):
+    name: str = Field(..., description="Nombre nuevo del contenedor")
+
+
+class RenameContainerResponse(BaseModel):
+    id: str
+    old_name: str
+    new_name: str
+    message: str
 
 
 class ContainerActionResponse(BaseModel):

@@ -147,6 +147,19 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
     }
   }
 
+  /**
+   * Sustituye un nombre en el inventario local (SPEC-19).
+   *
+   * Se actualiza en memoria y **no** refetchea: el id del contenedor no ha
+   * cambiado, así que la fila es la misma con otro nombre. Un refetch dejaría
+   * la lista parpadeando por un cambio que ya se conoce.
+   */
+  const renameLocal = useCallback((containerId: string, _anterior: string, nuevo: string) => {
+    setContainers((previas) =>
+      previas.map((c) => (c.id === containerId ? { ...c, name: nuevo } : c))
+    )
+  }, [])
+
   const filteredContainers = useMemo(() => {
     return containers.filter((c) => {
       // El estado se filtra en el navegador, y **antes** que la búsqueda: así el
@@ -191,6 +204,7 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
     searchQuery,
     setSearchQuery,
     actionInProgress,
+    renameLocal,
     refetch: fetchContainers,
     executeAction,
   }

@@ -24,6 +24,8 @@ import type {
   ContainerActionResponse,
   CreateContainerRequest,
   CreateContainerResponse,
+  RenameContainerRequest,
+  RenameContainerResponse,
 } from '../types/docker'
 import type { ContainerStats } from '../types/stats'
 import type {
@@ -117,6 +119,25 @@ export const dockerApi = {
   async getContainer(id: string): Promise<ContainerDetail> {
     const res = await fetch(`${BASE_URL}/containers/${id}`)
     return handleResponse<ContainerDetail>(res)
+  },
+
+  /**
+   * Cambia el nombre del contenedor (SPEC-19).
+   *
+   * No recrea nada: el id, el estado y los volúmenes no cambian. Lo único que
+   * hay que mirar es el `409`, porque el nombre es único en TODO el daemon y no
+   * sólo dentro del proyecto.
+   */
+  async renameContainer(
+    id: string,
+    data: RenameContainerRequest
+  ): Promise<RenameContainerResponse> {
+    const res = await fetch(`${BASE_URL}/containers/${id}/rename`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    })
+    return handleResponse<RenameContainerResponse>(res)
   },
 
   async createContainer(data: CreateContainerRequest): Promise<CreateContainerResponse> {

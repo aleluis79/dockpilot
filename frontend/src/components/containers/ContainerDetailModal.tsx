@@ -1,24 +1,40 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import React, { useEffect, useState } from 'react'
 import { MODAL_OVERLAY } from '../ui/modalOverlay'
-import { X, Server, Network, HardDrive, Terminal as TermIcon, Tag, Clock } from 'lucide-react'
+import { X, Server, Network, HardDrive, Terminal as TermIcon, Tag, Clock, Pencil } from 'lucide-react'
 import type { ContainerDetail, ContainerSummary } from '../../types/docker'
 import { dockerApi } from '../../services/dockerApi'
 import { StatusBadge } from '../ui/StatusBadge'
 import { ContainerHealthPanel } from './ContainerHealthPanel'
+import { RenameContainerModal } from './RenameContainerModal'
 
 interface ContainerDetailModalProps {
   container: ContainerSummary | null
   onClose: () => void
+  /**
+   * Nombres ya ocupados por otros contenedores (SPEC-19). Se pasan en vez de
+   * preguntarlos: el panel ya tiene el inventario cargado, y un viaje al daemon
+   * para comprobar algo que se sabe hace la acción más lenta de lo que debe.
+   */
+  otrosNombres?: string[]
+  /** Avisa de que el nombre del contenedor cambió, para refrescar la lista. */
+  onRenamed?: (containerId: string, oldName: string, newName: string) => void
 }
 
 export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
   container,
   onClose,
+  otrosNombres,
+  onRenamed,
 }) => {
   const [detail, setDetail] = useState<ContainerDetail | null>(null)
   const [loading, setLoading] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
+  const [renombrando, setRenombrando] = useState<boolean>(false)
+  // El nombre viene en el prop `container.name`, que no cambia al renombrar: si
+  // la cabecera leyera de ahí, seguiría mostrando el nombre viejo hasta que el
+  // padre refrescara. Se guarda en estado local justo para eso (SPEC-19).
+  const [nombre, setNombre] = useState<string>(container?.name ?? '')
 
   useEffect(() => {
     if (!container) return
@@ -55,6 +71,11 @@ export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
     }
   }, [container])
 
+  // Si el padre cambia de contenedor, el nombre local también.
+  useEffect(() => {
+    setNombre(container?.name ?? '')
+  }, [container?.id, container?.name])
+
   if (!container) return null
 
   return (
@@ -74,18 +95,26 @@ export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-lg font-semibold text-fg">{container.name}</h2>
+                <h2 className="text-lg font-semibold text-fg">{nombre}</h2>
                 <StatusBadge status={container.status} health={detail?.health} />
               </div>
               <p className="font-mono text-xs text-fg-muted">{container.id}</p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-fg-muted hover:text-fg hover:bg-fg/10 rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+<button
+              onClick={() => setRenombrando(true)}
+              title="Cambiar el nombre del contenedor"
+              className="p-1.5 text-fg-muted hover:text-fg hover:bg-fg/10 rounded-lg transition-colors"
+              aria-label="Renombrar contenedor"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 text-fg-muted hover:text-fg hover:bg-fg/10 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
         </div>
 
         {/* Content */}
@@ -212,6 +241,27 @@ export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
           </button>
         </div>
       </div>
+
+      {/* El diálogo de renombrado va por encima del detalle, no dentro: el
+          detalle queda montado detrás y al cerrar se vuelve a él, que es lo que
+          espera quien estaba leyendo sus datos. */}
+      {renombrando && container && (
+        <RenameContainerModal
+          containerId={container.id}
+          nombreActual={nombre}
+          networks={detail?.networks}
+          otrosNombres={otrosNombres ?? []}
+          onClose={() => setRenombrando(false)}
+          onRenamed={(anterior, nuevo) => {
+            setRenombrando(false)
+            // El nombre es sólo presentación: el id no cambia, así que no hace
+            // falta recargar nada más que el nombre en la cabecera.
+            setNombre(nuevo)
+            setDetail((d) => (d ? { ...d, name: nuevo } : d))
+            onRenamed?.(container.id, anterior, nuevo)
+          }}
+        />
+      )}
     </div>
   )
 }

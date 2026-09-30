@@ -74,6 +74,25 @@ export interface ContainerDetail extends ContainerSummary {
    * dejara el `HealthSummary` del padre, TypeScript no los dejaría leer.
    */
   health?: HealthDetail;
+  /**
+   * Redes a las que está conectado. En una red **propia** el nombre del
+   * contenedor es su nombre DNS, así que renombrarlo rompe a quien resuelve el
+   * anterior (SPEC-19 §3.3). En la red `bridge` por defecto no hay nombres.
+   *
+   * No hay un `network_mode`: `HostConfig.NetworkMode` es sólo la red principal
+   * y dice `bridge` para un contenedor conectado además a una red propia.
+   */
+}
+
+export interface RenameContainerRequest {
+  name: string;
+}
+
+export interface RenameContainerResponse {
+  id: string;
+  old_name: string;
+  new_name: string;
+  message: string;
 }
 
 export interface ContainerActionResponse {
