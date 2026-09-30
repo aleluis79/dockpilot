@@ -8,6 +8,40 @@ export interface PortMapping {
 
 export type ContainerState = 'running' | 'exited' | 'paused' | 'restarting' | 'created' | 'dead';
 
+/**
+ * Los cuatro estados que distingue el daemon.
+ *
+ * `none` NO es "sin sickness": es "no hay healthcheck declarado", que es la
+ * ausencia del dato y no un estado más. Un contenedor sin sonda no se
+ * distinguirá en la UI de uno al que nunca se le miró.
+ */
+export type HealthStatus = 'healthy' | 'unhealthy' | 'starting' | 'none';
+
+export interface HealthSummary {
+  status: HealthStatus;
+  failing_streak: number;
+}
+
+/** Una sonda ya ejecutada por el daemon. */
+export interface HealthProbe {
+  started_at: string;
+  finished_at: string;
+  exit_code: number;
+  output: string;
+}
+
+/**
+ * Salud con el porqué. Solo en el detalle.
+ *
+ * El listado **no** trae `log`, así que un `HealthSummary` no puede llevarlo:
+ * por eso es un tipo aparte y no un campo opcional del resumen.
+ */
+export interface HealthDetail extends HealthSummary {
+  log: HealthProbe[];
+  /** Comandos que se están midiendo; vacío si no hay healthcheck. */
+  test: string[];
+}
+
 export interface ContainerSummary {
   id: string;
   name: string;
@@ -18,6 +52,15 @@ export interface ContainerSummary {
   ports: PortMapping[];
   /** Proyecto Docker Compose al que pertenece, si la etiqueta existe. */
   compose_project?: string | null;
+  /**
+   * Salud del healthcheck, si el contenedor lo declara.
+   *
+   * Opcional a propósito aunque el backend lo mande siempre: una respuesta sin
+   * este campo debe pintarse como "sin healthcheck", no revantar. Y el
+   * `StatusBadge` lo trata como ausencia igual que `"none"`, que es el mismo
+   * caso. Un contenedor sin sonda es la mayoría y no puede romper la vista.
+   */
+  health?: HealthSummary;
 }
 
 export interface ContainerDetail extends ContainerSummary {
@@ -26,6 +69,11 @@ export interface ContainerDetail extends ContainerSummary {
   labels: Record<string, string>;
   mounts: Array<Record<string, unknown>>;
   networks: string[];
+  /**
+   * El detalle re-declara el tipo para que `log` y `test` no se pierdan: si se
+   * dejara el `HealthSummary` del padre, TypeScript no los dejaría leer.
+   */
+  health?: HealthDetail;
 }
 
 export interface ContainerActionResponse {

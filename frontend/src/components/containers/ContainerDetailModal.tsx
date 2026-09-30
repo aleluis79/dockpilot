@@ -5,6 +5,7 @@ import { X, Server, Network, HardDrive, Terminal as TermIcon, Tag, Clock } from 
 import type { ContainerDetail, ContainerSummary } from '../../types/docker'
 import { dockerApi } from '../../services/dockerApi'
 import { StatusBadge } from '../ui/StatusBadge'
+import { ContainerHealthPanel } from './ContainerHealthPanel'
 
 interface ContainerDetailModalProps {
   container: ContainerSummary | null
@@ -74,7 +75,7 @@ export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-lg font-semibold text-fg">{container.name}</h2>
-                <StatusBadge status={container.status} />
+                <StatusBadge status={container.status} health={detail?.health} />
               </div>
               <p className="font-mono text-xs text-fg-muted">{container.id}</p>
             </div>
@@ -104,6 +105,10 @@ export const ContainerDetailModal: React.FC<ContainerDetailModalProps> = ({
 
           {detail && (
             <>
+              {/* La salud va antes que los datos: si el healthcheck está
+                  fallando, es lo primero que se lee (SPEC-18 §3.4). */}
+              <ContainerHealthPanel health={detail.health} />
+
               {/* Información General */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="p-4 bg-elevated/40 rounded-xl border border-default/80">

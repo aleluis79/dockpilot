@@ -89,7 +89,7 @@ export const ContainersTable: React.FC<ContainersTableProps> = ({
                 </span>
               </td>
               <td className="py-3.5 px-4">
-                <StatusBadge status={c.status} />
+                <StatusBadge status={c.status} health={c.health} />
               </td>
               <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}>
                 <div className="flex flex-wrap gap-1.5">

@@ -91,6 +91,9 @@ class FakeDockerContainer:
         mounts: list | None = None,
         networks: dict | None = None,
         labels: dict | None = None,
+        health: str | None = None,
+        health_log: list[dict] | None = None,
+        health_test: list[str] | None = None,
     ):
         self.id = cid
         self._name = name
@@ -109,9 +112,19 @@ class FakeDockerContainer:
         # `/containers/json`; sin ellas no habria forma de saber a que proyecto
         # compose pertenece un contenedor (SPEC-11 §3.1).
         self._labels = labels or {}
+        # Salud (SPEC-18). Las TRES formas se midieron contra el daemon 29.8.1 y
+        # son distintas en cada endpoint, que es justo la trampa:
+        #   - en `containers/json` -> {"Status": "none", ...} sin healthcheck
+        #   - en `containers/{id}/json` -> State.Health AUSENTE (null) sin healthcheck
+        #   - en `containers/{id}/json` -> con Log cuando sí lo hay
+        # `None` en vez de "none" para poder modelar un daemon viejo que no
+        # manda la clave `Health` en el listado.
+        self._health = health
+        self._health_log = health_log or []
+        self._health_test = health_test or []
 
     def _as_summary_dict(self):
-        return {
+        resumen = {
             "Id": self.id,
             "Names": [self._name],
             "Image": self._image,
@@ -123,8 +136,30 @@ class FakeDockerContainer:
             "Labels": self._labels,
             "NetworkSettings": {"Networks": self._networks},
         }
+        # `Health` sólo existe en el listado de Docker >= 20.10. Sin la clave, el
+        # panel tiene que tratarlo como "none" y no romperse.
+        if self._health is not None:
+            resumen["Health"] = {
+                "Status": self._health,
+                "FailingStreak": len(self._health_log) if self._health == "unhealthy" else 0,
+            }
+        return resumen
 
     async def show(self):
+        estado = {
+            "Status": self._status,
+            "Running": self._status == "running",
+            "Paused": self._status == "paused",
+            "Restarting": self._status == "restarting",
+        }
+        # `State.Health` NO es "none" cuando no hay healthcheck: la clave no
+        # existe. El detalle tiene que confundir los dos casos sin romperse.
+        if self._health and self._health != "none":
+            estado["Health"] = {
+                "Status": self._health,
+                "FailingStreak": len(self._health_log) if self._health == "unhealthy" else 0,
+                "Log": self._health_log,
+            }
         return {
             "Id": self.id,
             "Name": self._name,
@@ -133,13 +168,9 @@ class FakeDockerContainer:
                 "Cmd": ["nginx", "-g", "daemon off;"],
                 "Env": ["PATH=/usr/local/sbin", "PORT=80"],
                 "Labels": {"maintainer": "DockPilot"},
+                "Healthcheck": {"Test": self._health_test} if self._health_test else None,
             },
-            "State": {
-                "Status": self._status,
-                "Running": self._status == "running",
-                "Paused": self._status == "paused",
-                "Restarting": self._status == "restarting",
-            },
+            "State": estado,
             "Created": "2026-09-25T12:00:00Z",
             "HostConfig": {
                 "PortBindings": {"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]},
@@ -703,7 +734,71 @@ def mock_docker():
         ports=[],
     )
 
-    containers_db = {"c123": c_running, "c456": c_exited}
+    # Escenario de salud (SPEC-18). Los cuatro estados del daemon, más el caso
+    # que rompe la UI si no se maneja: una sonda que imprime 3 MB.
+    c_unhealthy = FakeDockerContainer(
+        cid="c789",
+        name="/db",
+        image="postgres:16",
+        status="running",
+        state="running",
+        health="unhealthy",
+        health_log=[
+            {
+                "Start": f"2026-09-30T18:40:{i:02d}.069196549-03:00",
+                "End": f"2026-09-30T18:40:{i:02d}.09728021-03:00",
+                "ExitCode": 1,
+                "Output": "pg_isready: connection refused\n",
+            }
+            for i in range(3)
+        ],
+        health_test=["CMD-SHELL", "pg_isready -U postgres"],
+    )
+    c_starting = FakeDockerContainer(
+        cid="c790",
+        name="/api",
+        image="mi/api:1.0",
+        status="running",
+        state="running",
+        health="starting",
+        health_test=["CMD", "/app/healthcheck"],
+    )
+    c_healthy = FakeDockerContainer(
+        cid="c791",
+        name="/sano",
+        image="nginx:alpine",
+        status="running",
+        state="running",
+        health="healthy",
+        health_test=["CMD-SHELL", "curl -fsS localhost/"],
+    )
+    c_ruidoso = FakeDockerContainer(
+        cid="c792",
+        name="/ruidoso",
+        image="mi/ruidoso:1.0",
+        status="running",
+        state="running",
+        health="unhealthy",
+        health_log=[
+            {
+                "Start": "2026-09-30T18:40:00.069196549-03:00",
+                "End": "2026-09-30T18:40:00.09728021-03:00",
+                "ExitCode": 2,
+                # 3 MB: una sonda puede imprimir un volcado entero.
+                "Output": "x" * (3 * 1024 * 1024),
+            }
+        ],
+        health_test=["CMD", "/app/check"],
+    )
+
+    containers_db = {
+        "c123": c_running,
+        "c456": c_exited,
+        "c789": c_unhealthy,
+        "c790": c_starting,
+        "c791": c_healthy,
+        "c792": c_ruidoso,
+    }
 
     async def fake_list(all=True, filters=None):
         res = []

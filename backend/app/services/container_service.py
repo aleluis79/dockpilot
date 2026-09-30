@@ -19,6 +19,9 @@ from app.schemas.container import (
     ContainerSummary,
     CreateContainerRequest,
     CreateContainerResponse,
+    HealthDetail,
+    HealthProbe,
+    HealthSummary,
     PortMapping,
 )
 from app.schemas.log import LogEntry, LogSnapshotResponse
@@ -247,17 +250,125 @@ def _as_dict_get(datos: Any, clave: str) -> dict[str, Any]:
     return valor if isinstance(valor, dict) else {}
 
 
+def _as_str(valor: Any) -> str:
+    return valor if isinstance(valor, str) else ""
+
+
+def _as_int(valor: Any) -> int:
+    """Entero o cero. El daemon manda `null` en varios campos cuando no puede
+    medir, y un `None` en un campo `int` revienta la respuesta."""
+    if isinstance(valor, bool):
+        return 0
+    if isinstance(valor, int):
+        return valor
+    if isinstance(valor, float):
+        return int(valor)
+    if isinstance(valor, str):
+        try:
+            return int(valor)
+        except ValueError:
+            return 0
+    return 0
+
+
+# --- Salud (SPEC-18) ------------------------------------------------------------
+
+# Los cuatro estados que distingue el daemon. Un estado que no sea uno de estos
+# se trata como "none": el schema es un `Literal` y una versión nueva del daemon
+# no puede meter un valor por la puerta de atrás y acabar pintado como sano.
+_ESTADOS_SALUD = frozenset({"healthy", "unhealthy", "starting", "none"})
+
+# Tope de la salida de una sonda. El daemon YA recorta a 4096 bytes por su cuenta
+# (medido: una sonda que imprime 3 MB llega con 4099), así que esto es defensa en
+# profundidad y no la barrera principal. Si mañana el daemon deja de recortar, el
+# detalle sigue sin recibir megabytes por el socket.
+MAX_SALIDA_SONDA = 4096
+
+
+def _estado_salud(valor: Any) -> str:
+    estado = _as_str(valor) if isinstance(valor, str) else ""
+    return estado if estado in _ESTADOS_SALUD else "none"
+
+
+def _health_de_listado(info: dict[str, Any]) -> HealthSummary:
+    """Salud desde `containers/json`.
+
+    Ahí `"none"` es un **valor**: es el único sitio donde se distingue "no
+    healthcheck" de "sonda en curso". La clave no existe en Docker < 20.10, y su
+    ausencia también quiere decir "none" (SPEC-18 §2.2).
+    """
+    health = info.get("Health")
+    if not isinstance(health, dict):
+        return HealthSummary()
+    return HealthSummary(
+        status=_estado_salud(health.get("Status")),
+        failing_streak=_as_int(health.get("FailingStreak")),
+    )
+
+
+def _health_de_inspect(info: dict[str, Any]) -> HealthDetail:
+    """Salud desde `containers/{id}/json`, que además trae el porqué.
+
+    Aquí la ausencia es `None` y **no** `"none"`: sin healthcheck, `State.Health`
+    directamente no existe. Confundir los dos casos haría que un contenedor sin
+    sonda pareciera evaluado.
+
+    `Log` sí existe en este endpoint (las últimas 5 sondas con su salida) y es lo
+    que convierte "está unhealthy" en algo accionable.
+    """
+    state = info.get("State") if isinstance(info.get("State"), dict) else {}
+    health = state.get("Health")
+
+    test_bruto = _as_dict_get(info, "Config").get("Healthcheck")
+    test = test_bruto.get("Test") if isinstance(test_bruto, dict) else None
+
+    if not isinstance(health, dict):
+        return HealthDetail(test=[str(t) for t in test] if isinstance(test, list) else [])
+
+    log = health.get("Log")
+    return HealthDetail(
+        status=_estado_salud(health.get("Status")),
+        failing_streak=_as_int(health.get("FailingStreak")),
+        log=[
+            HealthProbe(
+                started_at=_as_str(sonda.get("Start")),
+                finished_at=_as_str(sonda.get("End")),
+                exit_code=_as_int(sonda.get("ExitCode")),
+                output=_recortar(_as_str(sonda.get("Output")), MAX_SALIDA_SONDA),
+            )
+            for sonda in (log if isinstance(log, list) else [])
+            if isinstance(sonda, dict)
+        ],
+        test=[str(t) for t in test] if isinstance(test, list) else [],
+    )
+
+
+def _recortar(texto: str, limite: int) -> str:
+    """Recorta diciendo cuántos bytes quitó, para no fingir que es todo."""
+    if len(texto) <= limite:
+        return texto
+    return f"{texto[:limite]}\n… ({len(texto) - limite} bytes más, recortados)"
+
+
 class ContainerService:
     @staticmethod
     async def list_containers(
         docker: aiodocker.Docker,
         all: bool = True,
         status: str | None = None,
+        health: list[str] | None = None,
     ) -> list[ContainerSummary]:
         try:
             filters = {}
             if status:
                 filters["status"] = [status]
+            # El filtro de salud lo pone el daemon, no la vista: `filters.health`
+            # existe en la API y quien filtra son las peticiones (SPEC-18 §3.2).
+            # Se acepta una lista porque "Con problemas" son dos estados:
+            # `unhealthy` (ya falló) y `starting` (dentro del start_period, aún
+            # no se sabe). Docker los une con OR dentro del mismo filtro.
+            if health:
+                filters["health"] = list(health)
 
             raw_containers = await docker.containers.list(all=all, filters=filters)
             summaries = []
@@ -281,6 +392,10 @@ class ContainerService:
                         # Proyecto compose al que pertenece, si la etiqueta existe
                         # (SPEC-11). `None` en un contenedor normal.
                         compose_project=compose_project_of(info.get("Labels")),
+                        # El listado ya trae `Health` con status y contador, así
+                        # que esto no cuesta ni una llamada: no hay un `show()`
+                        # por contenedor (SPEC-18 §3.1).
+                        health=_health_de_listado(info),
                     )
                 )
             return summaries
@@ -346,6 +461,10 @@ class ContainerService:
                 labels=config.get("Labels") or {},
                 mounts=info.get("Mounts", []),
                 networks=networks,
+                # El detalle **reemplaza** el `health` heredado por el del
+                # inspect, que es el único con `Log`. Si se usara el del
+                # listado, el historial saldría siempre vacío (SPEC-18 §2.1).
+                health=_health_de_inspect(info),
             )
         except DockerError as e:
             if e.status == 404:

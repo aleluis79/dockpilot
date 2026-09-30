@@ -35,9 +35,20 @@ async def list_containers(
     docker: DockerDep,
     all: bool = Query(True, description="Mostrar todos los contenedores (incluyendo detenidos)"),
     status: str | None = Query(None, description="Filtrar por estado: running, exited, etc."),
+    health: Annotated[
+        list[str] | None,
+        Query(
+            description=(
+                "Filtrar por salud. Admite varios: unhealthy, starting, healthy, "
+                "none. Los une con OR, como hace el daemon (SPEC-18 §3.2)"
+            )
+        ),
+    ] = None,
 ):
     """Lista todos los contenedores con soporte para filtrado."""
-    return await ContainerService.list_containers(docker=docker, all=all, status=status)
+    return await ContainerService.list_containers(
+        docker=docker, all=all, status=status, health=health
+    )
 
 
 @router.get("/{container_id}", response_model=ContainerDetail)

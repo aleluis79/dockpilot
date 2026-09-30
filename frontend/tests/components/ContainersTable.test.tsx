@@ -129,3 +129,44 @@ describe('ContainersTable', () => {
     expect(insignias[0]).toHaveTextContent('tickets-app')
   })
 })
+
+// --- Healthchecks (SPEC-18) ----------------------------------------------------
+
+describe('ContainersTable con salud', () => {
+  const conSalud = (estado: 'healthy' | 'unhealthy' | 'starting', streak = 0) => ({
+    id: 'c1',
+    name: 'web-nginx',
+    image: 'nginx:alpine',
+    status: 'running',
+    state: 'running',
+    created: 1727290000,
+    ports: [],
+    health: { status: estado, failing_streak: streak },
+  })
+
+  it('un contenedor unhealthy lleva su marca de salud en la fila', () => {
+    render(<ContainersTable containers={[conSalud('unhealthy', 8)]} />)
+
+    expect(screen.getByTestId('salud-badge')).toHaveTextContent('unhealthy')
+  })
+
+  it('un contenedor sin healthcheck no lleva marca alguna', () => {
+    render(
+      <ContainersTable
+        containers={[
+          {
+            id: 'c1',
+            name: 'web-nginx',
+            image: 'nginx:alpine',
+            status: 'running',
+            state: 'running',
+            created: 1727290000,
+            ports: [],
+          },
+        ]}
+      />
+    )
+
+    expect(screen.queryByTestId('salud-badge')).not.toBeInTheDocument()
+  })
+})

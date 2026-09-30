@@ -27,9 +27,12 @@ async def test_filter_containers_by_status(async_client: AsyncClient):
     response = await async_client.get("/api/v1/containers?status=running")
     assert response.status_code == 200
     data = response.json()
-    assert len(data) == 1
-    assert data[0]["status"] == "running"
-    assert data[0]["id"] == "c123"
+    # Se comprueba que el FILTRO funciona, no cuántos hay: el escenario de
+    # referencia creció con los contenedores de salud de SPEC-18 y una
+    # aserción sobre el total se rompería cada vez que se añada uno.
+    assert data, "el filtro devuelve al menos el contenedor en marcha"
+    assert all(c["status"] == "running" for c in data)
+    assert "c123" in [c["id"] for c in data]
 
 
 @pytest.mark.asyncio
@@ -235,3 +238,186 @@ def test_stderr_exige_marca_explicita():
         "Server started",
     ]:
         assert parse_docker_log_line(cruda).stream == "stdout", cruda
+
+
+# --- Healthchecks (SPEC-18) ----------------------------------------------------
+#
+# Las tres formas del dato se midieron contra el daemon 29.8.1 y NO son la misma
+# en cada sitio, que es la trampa de esta spec:
+#   - `containers/json`     -> `Health: {"Status": "none"}` sin healthcheck
+#   - `containers/{id}/json` -> `State.Health` AUSENTE (no "none") sin healthcheck
+#   - `containers/{id}/json` -> `Config.Healthcheck.Test` solo si hay healthcheck
+
+
+def _sondas(codigo: int, salida: str = "", cuantas: int = 1) -> list[dict]:
+    return [
+        {
+            "Start": f"2026-09-30T18:40:{i:02d}.069196549-03:00",
+            "End": f"2026-09-30T18:40:{i:02d}.09728021-03:00",
+            "ExitCode": codigo,
+            "Output": salida,
+        }
+        for i in range(cuantas)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_el_listado_incluye_la_salud(mock_docker):
+    from app.services.container_service import ContainerService
+
+    resumenes = await ContainerService.list_containers(mock_docker)
+    por_nombre = {r.name: r for r in resumenes}
+
+    assert por_nombre["web-app"].health.status == "none"
+    assert por_nombre["db"].health.status == "unhealthy"
+    assert por_nombre["db"].health.failing_streak == 3
+    assert por_nombre["api"].health.status == "starting"
+    assert por_nombre["sano"].health.status == "healthy"
+
+
+@pytest.mark.asyncio
+async def test_el_listado_no_hace_inspect_por_contenedor(mock_docker):
+    """El `Health` viene en `containers/json`: si hiciera falta un `show()` por
+    contenedor, la lista serían N+1 llamadas para pintar una etiqueta."""
+    from app.services.container_service import ContainerService
+
+    inspectados: list[str] = []
+    original = mock_docker.containers.get
+
+    async def get_contado(cid):
+        inspectados.append(cid)
+        return await original(cid)
+
+    mock_docker.containers.get = get_contado
+
+    await ContainerService.list_containers(mock_docker)
+
+    assert inspectados == [], "la lista no debería inspeccionar contenedores"
+
+
+@pytest.mark.asyncio
+async def test_un_daemon_que_no_manda_health_deja_none(mock_docker):
+    """`Health` en el listado sólo existe en Docker >= 20.10. Un daemon viejo no
+    manda la clave y el panel tiene que funcionar igual.
+
+    Con `_health = None` el doble omite `Health` del resumen, que es exactamente
+    la forma de un daemon que no la manda.
+    """
+    from app.services.container_service import ContainerService
+
+    for c in mock_docker.containers_db.values():
+        c._health = None
+
+    resumenes = await ContainerService.list_containers(mock_docker)
+
+    assert resumenes, "la lista se devuelve igual"
+    assert all(r.health.status == "none" for r in resumenes)
+
+
+@pytest.mark.asyncio
+async def test_el_detalle_trae_el_historial_de_sondas(mock_docker):
+    from app.services.container_service import ContainerService
+
+    detalle = await ContainerService.get_container(mock_docker, "c789")
+
+    assert detalle.health.status == "unhealthy"
+    assert detalle.health.failing_streak == 3
+    assert len(detalle.health.log) == 3
+    assert detalle.health.log[0].exit_code == 1
+    assert "connection refused" in detalle.health.log[0].output
+    # Y el comando que se está midiendo: sin saber QUÉ se mide, "unhealthy" no
+    # es accionable.
+    assert detalle.health.test == ["CMD-SHELL", "pg_isready -U postgres"]
+
+
+@pytest.mark.asyncio
+async def test_el_detalle_usa_el_health_del_inspect_y_no_el_del_listado(mock_docker):
+    """Si el detalle usara el `Health` del listado, el historial saldría vacío:
+    el listado no trae `Log`."""
+    from app.services.container_service import ContainerService
+
+    detalle = await ContainerService.get_container(mock_docker, "c789")
+
+    assert detalle.health.log, "el historial sólo existe en el inspect"
+
+
+@pytest.mark.asyncio
+async def test_sin_healthcheck_el_detalle_no_trae_historial(mock_docker):
+    from app.services.container_service import ContainerService
+
+    detalle = await ContainerService.get_container(mock_docker, "c123")
+
+    assert detalle.health.status == "none"
+    assert detalle.health.log == []
+    assert detalle.health.test == []
+
+
+@pytest.mark.asyncio
+async def test_la_salida_de_una_sonda_se_recorta(mock_docker):
+    """Una sonda puede imprimir un volcado de 4 MB y el detalle es un modal."""
+    from app.services.container_service import ContainerService
+
+    enorme = "x" * (3 * 1024 * 1024)
+    detalle = await ContainerService.get_container(mock_docker, "c792")
+
+    assert detalle.health.status == "unhealthy"
+    assert len(detalle.health.log[0].output) < len(enorme)
+    assert detalle.health.log[0].output.startswith("xxx")
+    # Recortar la salida NO recorta el historial: son cosas distintas.
+    assert len(detalle.health.log) == 1
+
+
+@pytest.mark.asyncio
+async def test_el_filtro_de_salud_lo_resuelve_el_daemon(mock_docker):
+    """El filtro lo pone el daemon (`filters.health`), no la vista."""
+    from app.services.container_service import ContainerService
+
+    pedidos: list[dict] = []
+
+    async def listar(**kwargs):
+        pedidos.append(kwargs.get("filters") or {})
+        return []
+
+    mock_docker.containers.list = listar
+
+    await ContainerService.list_containers(mock_docker, health=["unhealthy"])
+
+    assert {"health": ["unhealthy"]} in pedidos
+
+
+@pytest.mark.asyncio
+async def test_el_filtro_de_salud_llega_por_la_api(async_client: AsyncClient, mock_docker):
+    """El filtro "Con problemas" es un parámetro de la petición, no del navegador."""
+    pedidos: list[dict] = []
+    original = mock_docker.containers.list
+
+    async def listar(**kwargs):
+        pedidos.append(kwargs.get("filters") or {})
+        return await original(**kwargs)
+
+    mock_docker.containers.list = listar
+
+    response = await async_client.get("/api/v1/containers?health=unhealthy&health=starting")
+
+    assert response.status_code == 200
+    assert {"health": ["unhealthy", "starting"]} in pedidos
+
+
+@pytest.mark.asyncio
+async def test_la_api_expone_la_salud_en_listado_y_detalle(async_client: AsyncClient):
+    """El contrato sale por HTTP, no sólo por el servicio (SPEC-18 §2.1)."""
+    listado = await async_client.get("/api/v1/containers")
+    assert listado.status_code == 200
+    por_id = {c["id"]: c for c in listado.json()}
+
+    assert por_id["c123"]["health"] == {"status": "none", "failing_streak": 0}
+    assert por_id["c789"]["health"]["status"] == "unhealthy"
+    assert por_id["c791"]["health"] == {"status": "healthy", "failing_streak": 0}
+
+    detalle = await async_client.get("/api/v1/containers/c789")
+    assert detalle.status_code == 200
+    salud = detalle.json()["health"]
+    assert salud["status"] == "unhealthy"
+    assert len(salud["log"]) == 3
+    assert salud["log"][0]["exit_code"] == 1
+    assert salud["test"] == ["CMD-SHELL", "pg_isready -U postgres"]

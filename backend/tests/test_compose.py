@@ -59,13 +59,24 @@ async def test_proyecto_sin_recursos_no_aparece(compose_client):
     assert all(p["name"] for p in data["projects"])
 
 
-async def test_recurso_sin_project_label_no_se_agrupa(compose_client):
+async def test_recurso_sin_project_label_no_se_agrupa(compose_client, mock_docker):
     data = await _overview(compose_client)
-    # `full-editor-db` no lleva etiqueta, y tampoco `web-app` ni `db-postgres`
-    # del doble base: los tres cuentan como contenedores sin proyecto.
-    assert data["unlabelled_containers"] == 3
+    # `full-editor-db` no lleva etiqueta y tampoco los del doble base. La
+    # expectativa se deriva del escenario de referencia en vez de ir escrita como
+    # un número: el inventario crece cada vez que se añade un contenedor —los de
+    # salud de SPEC-18, por ejemplo— y una cifra fija se rompería sin que cambie
+    # nada del comportamiento que este test comprueba.
+    esperados = {
+        c["Names"][0].lstrip("/")
+        for c in (await mock_docker.containers.list(all=True))
+        if not (c.get("Labels") or {}).get("com.docker.compose.project")
+    }
+    assert esperados, "el doble tiene contenedores sin proyecto"
+    assert data["unlabelled_containers"] == len(esperados)
+
     nombres = {p["name"] for p in data["projects"]}
     assert not any("full-editor" in n for n in nombres)
+    assert "full-editor-db" in esperados
 
 
 async def test_volumen_anonymous_no_se_agrupa(compose_client):
@@ -198,8 +209,14 @@ async def test_acepta_contenedores_como_objetos_de_aiodocker(mock_compose_docker
     assert proyecto["containers_total"] == 2
     assert proyecto["containers_running"] == 2
     assert proyecto["services_count"] == 2
-    # Y ningún contenedor cae en el contador de sin etiquetar.
-    assert data.unlabelled_containers == 3
+    # Y ningún contenedor cae en el contador de sin etiquetar. La cifra se
+    # deriva de los resúmenes del propio doble: este test comprueba que el
+    # inventario acepta objetos de aiodocker, y el número total de contenedores
+    # sin proyecto es otra cosa (SPEC-18 añadió contenedores al escenario).
+    sin_etiqueta = sum(
+        1 for s in summaries if not (s.get("Labels") or {}).get("com.docker.compose.project")
+    )
+    assert data.unlabelled_containers == sin_etiqueta
 
 
 # --- Errores -------------------------------------------------------------------

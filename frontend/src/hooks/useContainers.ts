@@ -19,6 +19,13 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string>('all')
+  // Filtro de salud (SPEC-18). Se aplica en el navegador y **no** se pide al
+  // daemon, por el mismo motivo que el de estado: los contadores de las píldoras
+  // son un censo del host, y pedirle al daemon sólo los `unhealthy` haría que
+  // `rawContainers` dejara de ser el censo y los contadores bailarían. El
+  // parámetro `?health=` sigue existiendo en la API para quien la llame
+  // directamente (SPEC-18 §3.2).
+  const [healthFilter, setHealthFilter] = useState<string>('all')
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [actionInProgress, setActionInProgress] = useState<string | null>(null)
 
@@ -149,13 +156,28 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
         statusFilter === 'all' || c.status.toLowerCase() === statusFilter.toLowerCase()
       if (!matchesStatus) return false
 
+      // Salud (SPEC-18). "Con problemas" son los dos estados que piden atención:
+      // `unhealthy` ya falló y `starting` está dentro del `start_period`, donde
+      // aún no se sabe. Un contenedor sin healthcheck (`none` o sin campo) nunca
+      // entra en este filtro: no es un problema, es la ausencia del dato.
+      let matchesHealth = true
+      if (healthFilter === 'problemas') {
+        const salud = c.health?.status
+        matchesHealth = salud === 'unhealthy' || salud === 'starting'
+      } else if (healthFilter === 'unhealthy') {
+        matchesHealth = c.health?.status === 'unhealthy'
+      } else if (healthFilter === 'healthy') {
+        matchesHealth = c.health?.status === 'healthy'
+      }
+      if (!matchesHealth) return false
+
       const matchesSearch =
         c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         c.image.toLowerCase().includes(searchQuery.toLowerCase()) ||
         c.id.toLowerCase().includes(searchQuery.toLowerCase())
       return matchesSearch
     })
-  }, [containers, searchQuery, statusFilter])
+  }, [containers, searchQuery, statusFilter, healthFilter])
 
   return {
     containers: filteredContainers,
@@ -164,6 +186,8 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
     error,
     statusFilter,
     setStatusFilter,
+    healthFilter,
+    setHealthFilter,
     searchQuery,
     setSearchQuery,
     actionInProgress,

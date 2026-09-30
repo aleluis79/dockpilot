@@ -32,6 +32,8 @@ function App() {
     error,
     statusFilter,
     setStatusFilter,
+    healthFilter,
+    setHealthFilter,
     searchQuery,
     setSearchQuery,
     actionInProgress,
@@ -56,6 +58,17 @@ function App() {
     { label: 'Activos', value: 'running', count: runningCount },
     { label: 'Detenidos', value: 'exited', count: exitedCount },
     { label: 'Pausados', value: 'paused', count: rawContainers.filter((c) => c.status.toLowerCase() === 'paused').length },
+  ]
+
+  // Salud (SPEC-18). `Con problemas` junta `unhealthy` y `starting`: los dos
+  // piden mirar, aunque por razones distintas. El recuento sale de `rawContainers`
+  // —el censo entero— para que la píldora no dependa de qué se esté viendo.
+  const conProblemas = rawContainers.filter(
+    (c) => c.health?.status === 'unhealthy' || c.health?.status === 'starting'
+  ).length
+  const healthOptions = [
+    { label: 'Con problemas', value: 'problemas', count: conProblemas },
+    { label: 'Con sonda sana', value: 'healthy', count: rawContainers.filter((c) => c.health?.status === 'healthy').length },
   ]
 
   return (
@@ -168,6 +181,43 @@ function App() {
                   </button>
                 )
               })}
+              {healthOptions.some((o) => o.count > 0) && (
+                <>
+                  {/* Separador: el filtro de salud no es del mismo eje que el de
+                      estado. Un contenedor puede estar parado y sano a la vez. */}
+                  <span className="w-px h-5 bg-strong mx-1 shrink-0" aria-hidden="true" />
+                  {healthOptions.map((opt) => {
+                    const active = healthFilter === opt.value
+                    return (
+                      <button
+                        key={opt.value}
+                        onClick={() => setHealthFilter(opt.value)}
+                        title={
+                          opt.value === 'problemas'
+                            ? 'Contenedores cuyo healthcheck falló, o que aún están en su periodo de gracia'
+                            : 'Contenedores con healthcheck y en verde'
+                        }
+                        className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all flex items-center gap-2 shrink-0 ${
+                          active
+                            ? opt.value === 'problemas'
+                              ? 'bg-rose-600 text-white shadow-lg shadow-rose-500/20'
+                              : 'bg-emerald-600 text-white shadow-lg shadow-emerald-500/20'
+                            : 'bg-surface text-fg-muted hover:text-fg hover:bg-fg/10 border border-default/80'
+                        }`}
+                      >
+                        <span>{opt.label}</span>
+                        <span
+                          className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                            active ? 'bg-black/25 text-white' : 'bg-elevated text-fg-muted'
+                          }`}
+                        >
+                          {opt.count}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </>
+              )}
             </div>
 
             {/* Barra de Búsqueda */}

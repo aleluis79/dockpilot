@@ -209,6 +209,32 @@ Detalles que no son evidentes:
 
 Es la única parte del backend que **no** usa los métodos de `DockerContainer`, a propósito: `MultiplexedResult` descarta el byte y no hay forma de recuperarlo por debajo. El proyecto ya usa primitivas internas de aiodocker en otros sitios (`_query_json` para redes y para `/system/df`), así que no es una excepción nueva.
 
+
+#### Healthchecks: el dato está en tres sitios y no es el mismo (SPEC-18)
+
+Docker expone la salud del contenedor en **dos** endpoints con **formas distintas**, y confundirlas rompe el panel de tres maneras:
+
+| Dónde | Sin healthcheck | Con healthcheck |
+| :--- | :--- | :--- |
+| `containers/json` -> `Health` | `{"Status": "none", "FailingStreak": 0}` | `{"Status": "healthy", ...}` |
+| `containers/{id}/json` -> `State.Health` | **la clave no existe** | `{Status, FailingStreak, **Log**}` |
+| `containers/{id}/json` -> `Config.Healthcheck.Test` | `null` | `["CMD-SHELL", "exit 0"]` |
+
+Tres reglas que salen de esa tabla:
+
+- **En el listado `"none"` es un valor; en el detalle la ausencia es `None`.** No es la misma forma en los dos sitios, y tratarlas igual haría que un contenedor sin sonda pareciera evaluado saliendo bien.
+- **El listado trae la salud y el detalle trae el porqué.** `Health` en `containers/json` es lo que permite pintar la píldora **sin ni una llamada extra**: no hay un `show()` por contenedor. Hay un test que lo verifica (`test_el_listado_no_hace_inspect_por_contenedor`) porque el N+1 sería la forma fácil de hacerlo mal.
+- **`Health` en el listado sólo existe en Docker >= 20.10.** Un daemon más viejo no manda la clave y el panel tiene que funcionar igual, tratando la ausencia como `"none"`.
+
+Dos cosas más que costaron sangre:
+
+- **`ContainerDetail` re-declara `health` con el tipo estrecho, y no es opcional.** Pydantic recorta el valor al tipo del campo declarado en el padre, así que si `ContainerDetail` no re-declarase, un `HealthDetail` entero se serializaría como `HealthSummary` y `log` y `test` desaparecerían **sin lanzar ningún error**. Es el tipo de bug que un test de contrato por HTTP sí pilla y una prueba unitaria del servicio no.
+- **La salida de una sonda ya viene recortada por el daemon, a 4096 bytes.** Medido: una sonda que imprimía 3 MB llega con `len(Output) == 4099`. El recorte del panel es defensa en profundidad, no la barrera principal, y el comentario del código lo dice así para que nadie lo justifique con un motivo falso.
+
+Y la decisión de UI que más se nota: **sin healthcheck no se pinta nada**. De los contenedores del host de referencia, la mayoría no declara sonda, así que un "none" al lado de cada uno sería gritar sobre lo que no está mal. El estado de ejecución (`running`, `exited`) sigue siendo el titular de la píldora y la salud va al lado como marca secundaria: son ejes distintos y un contenedor puede estar parado y sano a la vez.
+
+El filtro de salud va **en el navegador**, no en el daemon, por el mismo motivo que el de estado: los contadores de las píldoras son un censo del host y pedirle al daemon sólo los `unhealthy` los haría bailar. El parámetro `?health=` sí existe en la API porque es la superficie correcta para quien la llame directamente.
+
 #### Trampa: un búfer de stream sin tope no es sólo memoria
 
 El visor de logs de contenedor corta a 2000 entradas. El de compose **no cortaba nada**, y `ComposeLogsViewer` vuelve a trocear el historial entero en cada fragmento: un `logs --follow` de un servicio que parlaba mucho se convertía en O(n²) de CPU además de un heap sin límite.
@@ -268,6 +294,8 @@ dockpilot/
 │   ├── 13-compose-lifecycle.md  # Spec: Ciclo de vida de proyectos compose (up/stop/down/pull/logs)
 │   ├── 14-compose-file-browser.md # Spec: Explorador de archivos compose (elegir ruta sin copiarla)
 │   ├── 15-compose-deploy-from-plan.md # Spec: Desplegar un compose file desde el plan (up, coste de build)
+│   ├── 16-host-census-dashboard.md  # Spec: Panel de censo del host con barras apiladas
+│   ├── 18-container-healthchecks.md  # Spec: Salud del healthcheck en listado, detalle y filtro
 │   └── 16-host-census-dashboard.md # Spec: Dashboard de censo del host (barras, paleta de gráfico)
 ├── backend/
 │   ├── app/
@@ -286,7 +314,7 @@ dockpilot/
 │   │   │   └── docker.py
 │   │   ├── schemas/
 │   │   │   ├── compose.py
-│   │   │   ├── container.py
+│   │   │   ├── container.py      # HealthSummary/HealthDetail (SPEC-18)
 │   │   │   ├── image.py
 │   │   │   ├── log.py
 │   │   │   ├── network.py

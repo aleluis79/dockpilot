@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -9,6 +9,48 @@ class PortMapping(BaseModel):
     private_port: int
     public_port: int | None = None
     type: str = "tcp"
+
+
+# Los cuatro estados que distingue el daemon. `none` NO es "sin sickness": es
+# "no hay healthcheck declarado", que es la ausencia del dato y no un valor
+# más. Un `Literal` en vez de `str` para que un estado desconocido del daemon
+# no entre por la puerta de atrás y acabe pintado como si fuera sano (SPEC-18).
+HealthStatus = Literal["healthy", "unhealthy", "starting", "none"]
+
+
+class HealthSummary(BaseModel):
+    """Salud del contenedor, o el hecho de que no tenga healthcheck.
+
+    Es un objeto y no un `str` porque "no healthcheck" no es un estado más: es
+    la ausencia del dato, y confundida con `"none"` haría que un contenedor sin
+    sonda pareciera evaluado y saliendo bien.
+    """
+
+    status: HealthStatus = "none"
+    failing_streak: int = 0
+
+
+class HealthProbe(BaseModel):
+    """Una sonda ya ejecutada por el daemon."""
+
+    started_at: str = Field("", description="Inicio en ISO-8601")
+    finished_at: str = Field("", description="Fin en ISO-8601")
+    exit_code: int = 0
+    output: str = Field("", description="Salida de la sonda, vacía si no dijo nada")
+
+
+class HealthDetail(HealthSummary):
+    """Salud con el porqué. Solo en el detalle, que es donde hay `inspect`.
+
+    El listado **no** trae `Log`, así que un `HealthSummary` del listado no
+    puede llevar historial: por eso `log` vive aquí y no en el resumen.
+    """
+
+    log: list[HealthProbe] = Field(default_factory=list)
+    test: list[str] = Field(
+        default_factory=list,
+        description="Config.Healthcheck.Test de la imagen; vacía si no hay healthcheck",
+    )
 
 
 class ContainerSummary(BaseModel):
@@ -23,6 +65,7 @@ class ContainerSummary(BaseModel):
         None,
         description="Proyecto Docker Compose al que pertenece, si la etiqueta existe (SPEC-11)",
     )
+    health: HealthSummary = Field(default_factory=HealthSummary)
 
 
 class ContainerDetail(ContainerSummary):
@@ -31,6 +74,12 @@ class ContainerDetail(ContainerSummary):
     labels: dict[str, str] = Field(default_factory=dict)
     mounts: list[dict[str, Any]] = Field(default_factory=list)
     networks: list[str] = Field(default_factory=list)
+    # `health` se hereda de `ContainerSummary` pero **se re-declara** aquí con el
+    # tipo más estrecho. No es opcional: Pydantic recorta el valor al tipo
+    # declarado en el padre, así que si `ContainerDetail` no lo re-declarase,
+    # un `HealthDetail` entero se serializaría como `HealthSummary` y `log` y
+    # `test` desaparecerían de la respuesta sin dar ningún error (SPEC-18 §2.1).
+    health: HealthDetail = Field(default_factory=HealthDetail)
 
 
 class ContainerActionResponse(BaseModel):
