@@ -35,6 +35,7 @@ function App() {
     setStatusFilter,
     healthFilter,
     setHealthFilter,
+    resetFilters,
     searchQuery,
     setSearchQuery,
     actionInProgress,
@@ -210,7 +211,14 @@ function App() {
                 return (
                   <button
                     key={opt.value}
-                    onClick={() => setStatusFilter(opt.value)}
+                    // «Todos» es la única píldora que dice «todos» y tiene que
+                    // quitarlos TODOS. Con esto solo tocando el estado, elegir un
+                    // filtro de salud y volver a pulsar «Todos» no cambiaba nada:
+                    // el de salud seguía puesto y la tabla seguía vacía, sin
+                    // ninguna forma de salir (SPEC-18).
+                    onClick={() =>
+                      opt.value === 'all' ? resetFilters() : setStatusFilter(opt.value)
+                    }
                     className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all flex items-center gap-2 shrink-0 ${
                       active
                         ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/20'
@@ -238,7 +246,11 @@ function App() {
                     return (
                       <button
                         key={opt.value}
-                        onClick={() => setHealthFilter(opt.value)}
+                        // Alternar a diferencia de las de estado, y por la razón
+                        // que se ve arriba: aquí el filtro de salud no tiene
+                        // «Todos» al lado, así que sin alternar la única forma de
+                        // salir era esa, y esta era la única que no limpiaba.
+                        onClick={() => setHealthFilter(active ? 'all' : opt.value)}
                         title={
                           opt.value === 'problemas'
                             ? 'Contenedores cuyo healthcheck falló, o que aún están en su periodo de gracia'

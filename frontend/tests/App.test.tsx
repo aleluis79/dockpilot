@@ -99,6 +99,27 @@ const stubFetch = () => {
  * lista completa, los contadores saldrían bien por casualidad y el test no
  * probaría nada.
  */
+// Fixture APARTE y no `variosContenedores`: añadirle contenedores con sonda
+// cambiaría los contadores que asertan otros tests de este fichero, y un test
+// que se rompe porque otro grew es un test que ya no dice lo que dice.
+const contenedoresConSalud = [
+  { id: 's1', name: 'sano', image: 'app', status: 'running', state: 'Up 3 hours', created: 1727290000, ports: [], health: { status: 'healthy', failing_streak: 0 } },
+  { id: 's2', name: 'roto', image: 'app', status: 'running', state: 'Up 3 hours', created: 1727290000, ports: [], health: { status: 'unhealthy', failing_streak: 2 } },
+  { id: 's3', name: 'arrancando', image: 'app', status: 'running', state: 'Up 1 minute', created: 1727290000, ports: [], health: { status: 'starting', failing_streak: 0 } },
+  { id: 's4', name: 'sin-sonda', image: 'app', status: 'running', state: 'Up 3 hours', created: 1727290000, ports: [] },
+  { id: 's5', name: 'viejo', image: 'app', status: 'exited', state: 'Exited (0)', created: 1727290000, ports: [], health: { status: 'healthy', failing_streak: 0 } },
+]
+
+const stubConSalud = () => {
+  const mock = vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => contenedoresConSalud,
+  }))
+  vi.stubGlobal('fetch', mock)
+  return mock
+}
+
 const stubFetchRespetandoFiltro = () => {
   const fetchMock = vi.fn(async (url: string) => {
     if (String(url).includes('/containers')) {
@@ -607,3 +628,140 @@ it('las píldoras se reparten en varias líneas en vez de cortar en scroll', asy
 // limpiaba por su cuenta. «Todos» solo quitaba el de estado, así que elegir «Con
 // problemas» y volver a «Todos» no cambiaba nada y la tabla seguía vacía; y las
 // píldoras de salud no alternaban, así que no había ninguna forma de salir.
+
+describe('App · filtros de salud', () => {
+  beforeEach(() => {
+    MockWebSocket.instances = []
+    stubConSalud()
+    // @ts-expect-error Mocking WebSocket
+    global.WebSocket = MockWebSocket
+    vi.stubGlobal('matchMedia', (query: string) => new MockMediaQueryList(query))
+    localStorage.clear()
+  })
+
+  // Se comprueba la PRESENCIA de cada nombre, no cuántas filas hay. Contar filas
+  // obliga a recortar la cabecera y a parsear el texto pegado de cada celda, y
+  // un test que falla por eso no señala el filtro.
+  const seVe = (nombre: string) => screen.queryByText(nombre) !== null
+
+  const visibles = () =>
+    ['sano', 'roto', 'arrancando', 'sin-sonda', 'viejo'].filter(seVe)
+
+  const conProblemas = () => screen.getByRole('button', { name: /^Con problemas/ })
+  const conSonda = () => screen.getByRole('button', { name: /^Con sonda sana/ })
+  const todos = () => screen.getByRole('button', { name: /^Todos/ })
+
+  it('«Con problemas» deja los que piden atención y solo esos', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('sano')
+
+    fireEvent.click(conProblemas())
+
+    // `unhealthy` y `starting`: este último está dentro del `start_period`,
+    // donde aún no se sabe, y por eso cuenta como problema (SPEC-18).
+    await waitFor(() => expect(visibles()).toEqual(['roto', 'arrancando']))
+  })
+
+  it('«Con sonda sana» deja los que están en verde y solo esos', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('sano')
+
+    fireEvent.click(conSonda())
+
+    await waitFor(() => expect(visibles()).toEqual(['sano', 'viejo']))
+  })
+
+  it('un contenedor sin sonda no entra en ninguno de los dos', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('sano')
+
+    fireEvent.click(conProblemas())
+    await waitFor(() => expect(visibles()).not.toContain('sin-sonda'))
+    fireEvent.click(conSonda())
+
+    // No es un problema, es la ausencia del dato (SPEC-18).
+    await waitFor(() => expect(visibles()).not.toContain('sin-sonda'))
+  })
+
+  it('volver a pulsar la píldora activa la deselecciona', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('sano')
+
+    fireEvent.click(conProblemas())
+    await waitFor(() => expect(visibles()).toEqual(['roto', 'arrancando']))
+
+    // Sin esto no había ninguna forma de salir del filtro.
+    fireEvent.click(conProblemas())
+
+    await waitFor(() => expect(visibles()).toHaveLength(5))
+  })
+
+  it('«Todos» limpia el filtro de SALUD, no solo el de estado', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('sano')
+
+    fireEvent.click(conProblemas())
+    await waitFor(() => expect(visibles()).toEqual(['roto', 'arrancando']))
+
+    fireEvent.click(todos())
+
+    // El fallo que se reportó: «Todos» no tocaba el filtro de salud, así que la
+    // tabla seguía mostrando dos filas y parecía que el filtro no hacía nada.
+    await waitFor(() => expect(visibles()).toHaveLength(5))
+  })
+
+  it('«Todos» limpia los dos filtros a la vez', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('sano')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Detenidos/ }))
+    await waitFor(() => expect(visibles()).toEqual(['viejo']))
+    fireEvent.click(conProblemas())
+    await waitFor(() => expect(visibles()).toEqual([]))
+
+    fireEvent.click(todos())
+
+    await waitFor(() => expect(visibles()).toHaveLength(5))
+  })
+
+  it('los dos filtros de salud no se pisan entre sí', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('sano')
+
+    fireEvent.click(conProblemas())
+    await waitFor(() => expect(visibles()).toEqual(['roto', 'arrancando']))
+    fireEvent.click(conSonda())
+
+    // El segundo sustituye al primero, no se acumulan: son el mismo campo visto
+    // de dos maneras, y poner los dos a la vez no puede devolver nada.
+    await waitFor(() => expect(visibles()).toEqual(['sano', 'viejo']))
+  })
+})

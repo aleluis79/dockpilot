@@ -178,6 +178,21 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
     return containers.map((c) => ({ ...c, observed: fijados.has(c.id) }))
   }, [containers, observados])
 
+  /**
+   * Quita TODOS los filtros y vuelve a mostrar el censo entero.
+   *
+   * Vive aquí y no en la vista porque son dos filtros los que hay que limpiar, no
+   * uno. Con «Todos» poniendo solo el de estado, elegir «Con problemas» y luego
+   * pulsar «Todos» dejaba el de salud puesto: la tabla se vaciaba y no había
+   * forma de volver, porque las píldoras de salud tampoco alternan. Dos filtros
+   * que se limpian de a uno son dos reglas, y el que se olvida es el que deja al
+   * usuario encerrado.
+   */
+  const resetFilters = useCallback(() => {
+    setStatusFilter('all')
+    setHealthFilter('all')
+  }, [])
+
   const filteredContainers = useMemo(() => {
     return conPin.filter((c) => {
       // El estado se filtra en el navegador, y **antes** que la búsqueda: así el
@@ -222,6 +237,7 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
     setStatusFilter,
     healthFilter,
     setHealthFilter,
+    resetFilters,
     searchQuery,
     setSearchQuery,
     actionInProgress,
