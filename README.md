@@ -13,9 +13,13 @@ autenticación y está pensado para un único operador en `127.0.0.1`.**
 - **Terminal** — sesión interactiva por WebSocket con xterm.js.
 - **Estadísticas** — CPU, memoria, red y bloque E/S en vivo, con sparkline.
 - **Imágenes** — inventario local, búsqueda en Docker Hub, detalle, descarga y borrado protegido.
+- **Limpieza** — imágenes sin etiqueta, imágenes con etiqueta sin uso, y contenedores parados, cada uno con su preaviso y su confirmación.
 - **Volúmenes** — listado con tamaño real, detalle, filtros por uso, limpieza de huérfanos y borrado.
 - **Redes** — inventario con subredes, detalle con IPAM, creación con CIDR opcional, borrado protegido y limpieza.
 - **Resumen del host** — versión de Docker, SO, núcleos, RAM, driver y espacio recuperable por tipo de recurso.
+- **Proyectos compose** — inventario por etiquetas, previsualización del archivo, despliegue, ciclo de vida y logs en vivo.
+- **Salud, renombrado y ficheros** — healthcheck con su log de sondas, renombrar sin recrear, y explorar y copiar ficheros dentro del contenedor.
+- **Histórico de métricas** — series de CPU, memoria, red y disco por contenedor, con observar para que sigan midiéndose con las ventanas cerradas.
 - **Tema claro/oscuro/sistema**, con detección de `prefers-color-scheme`.
 
 ## Stack
@@ -98,20 +102,31 @@ Los Makefile lanzan los procesos en segundo plano y escriben sus logs en
 
 ## API
 
-28 endpoints REST bajo `/api/v1`, más `GET /` y `GET /health`:
+43 endpoints REST bajo `/api/v1`, más `GET /` y `GET /health`:
 
 ```
 GET    /                             Raíz del servicio
 GET    /health                       Comprobación de salud
 GET    /api/v1/containers                     Listado de contenedores
 POST   /api/v1/containers                     Crear contenedor
+GET    /api/v1/containers/prune               Contenedores parados que se pueden limpiar
+POST   /api/v1/containers/prune               Limpiar contenedores parados
 GET    /api/v1/containers/{id}                Detalle
 DELETE /api/v1/containers/{id}                Borrar
 GET    /api/v1/containers/{id}/logs           Historial de logs
-POST   /api/v1/containers/{id}/{start|stop|restart|pause|unpause}
 GET    /api/v1/containers/{id}/stats          Estadísticas en vivo
+GET    /api/v1/containers/{id}/metrics        Serie temporal de métricas
+POST   /api/v1/containers/{id}/watch          Observar (el panel lo mide siempre)
+DELETE /api/v1/containers/{id}/watch          Dejar de observar
+POST   /api/v1/containers/{id}/rename         Renombrar
+GET    /api/v1/containers/{id}/files          Listar ficheros del contenedor
+GET    /api/v1/containers/{id}/files/download Descargar un fichero
+POST   /api/v1/containers/{id}/files/upload   Subir un fichero
+POST   /api/v1/containers/{id}/{start|stop|restart|pause|unpause}
 
 GET    /api/v1/images/local                   Imágenes locales
+GET    /api/v1/images/prune                   Imágenes que se pueden limpiar, por nivel
+POST   /api/v1/images/prune?all=[bool]        Limpiar imágenes sin etiqueta (o también con ella)
 GET    /api/v1/images/search                  Búsqueda en Docker Hub
 GET    /api/v1/images/{id}                    Detalle
 DELETE /api/v1/images/{id}                    Borrar
@@ -135,6 +150,7 @@ GET    /api/v1/system/overview                Vista completa en una respuesta
 GET    /api/v1/compose/projects               Proyectos compose detectados por etiquetas
 GET    /api/v1/compose/projects/{name}        Servicios, redes y volúmenes del proyecto
 POST   /api/v1/compose/plan                   Previsualizar un archivo compose (no ejecuta nada)
+GET    /api/v1/compose/browse                 Explorador para elegir ruta sin copiarla
 ```
 
 Las acciones del ciclo de vida viajan por WebSocket y no por REST: son procesos
@@ -215,10 +231,56 @@ colores van siempre por token de tema y no se introduce texto en otro idioma.
 ## Verificación
 
 ```bash
-make test    # 139 pruebas de backend + 205 de frontend
+make test    # 540 pruebas de backend + 602 de frontend
 make lint    # ruff y oxlint
 make build   # typecheck y build
 ```
+
+## El histórico de métricas
+
+Las métricas de un contenedor tienen dos capas, y conviene no confundirlas:
+
+- **En vivo** es el `WebSocket /ws/containers/{id}/stats`: la lectura de ahora
+  mismo, sin memoria.
+- **La serie temporal** es lo que acumula: `GET /containers/{id}/metrics` y un
+  mensaje `{"type": "history", ...}` que el mismo canal manda antes de la primera
+  muestra. Da CPU y memoria por porcentaje, y red y disco en **bytes por
+  segundo**, que salen de restar dos lecturas.
+
+Para que la curva siga creciendo con las ventanas cerradas está **Observar**: el
+backend sigue midiendo ese contenedor y su serie sigue ahí cuando vuelves, hasta
+un máximo de 12 observados. El anillo vive **en memoria**, así que reiniciar el
+panel lo borra, y la interfaz lo dice en vez de mostrar un vacío sin explicación.
+
+Tres cosas que el panel se niega a dibujar, porque serían afirmaciones falsas: un
+cero donde no se midió (un contenedor parado deja un hueco, no un 0), una línea
+uniendo dos puntos separados por un hueco de tiempo, y una caída de 40 GB cuando
+el contenedor se reinicia y sus contadores vuelven a cero — ahí el trazo se
+parte.
+
+## Limpiar lo que no se usa
+
+Tres niveles, cada uno con su botón y **su** confirmación, porque no son la misma
+cosa:
+
+| Botón | Qué borra | Qué no se puede recuperar |
+| :--- | :--- | :--- |
+| **Limpiar sin etiqueta** (imágenes) | Imágenes sin etiqueta que no use ningún contenedor | Casi nada: es basura de un `build` viejo |
+| **quitar también las que tienen etiqueta** | Además, las que tienen etiqueta y no usa nadie | **Habrá que volver a descargarlas** |
+| **Limpiar parados** (contenedores) | Los contenedores parados | Su **capa de escritura**: lo escrito dentro y no montado en un volumen |
+
+Dos cosas que conviene saber antes de mirar un número:
+
+- **Los bytes del diálogo son una cota**, y la interfaz escribe *hasta* a propósito:
+  el recuento suma el tamaño de cada imagen y dos imágenes pueden compartir capas.
+- **El total recuperable del resumen del host no es lo que da el botón.** El
+  resumen cuenta todo lo que no usa un contenedor, con y sin etiqueta; el botón
+  seguro sólo toca lo que no tiene etiqueta. En una máquina normal son cifras
+  muy distintas, y cada botón muestra **su** preaviso.
+
+Ninguna limpieza alcanza lo que está en uso: lo decide el daemon. Y si el daemon
+no sabe decirnos qué se puede limpiar, el botón lo dice y se desactiva, en vez de
+afirmar que no hay nada.
 
 ## Ayuda integrada
 

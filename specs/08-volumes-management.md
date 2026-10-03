@@ -273,6 +273,17 @@ Característica: Gestión de volúmenes Docker
 
 ---
 
+### 5.1 Corrección posterior: el filtro `all` (SPEC-21, por reporte de usuario)
+
+El botón de limpieza **no hacía nada** en un host normal, y no se parecía a un error. `POST /volumes/prune` tiene un parámetro `all` que el daemon define como «considera todos los volúmenes, no sólo los anónimos» y que **por omisión vale `false`**: sin él, un volumen con nombre y sin uso —todo lo que crea un `docker run -v` o un compose— no se borra nunca. Es el `docker volume prune --all`.
+
+Tres cosas se corrigieron:
+
+1. `VolumeService.prune_volumes()` manda `filters={"all": "true"}`. **Como cadena**: `clean_filters` de aiodocker serializa el valor tal cual, y `{"all": True}` sale como `{"all": [true]}` → `400 invalid filter` (medido contra el 29.8.2).
+2. El mensaje de resultado vacío ya no dice «No hay volúmenes sin uso: nada que limpiar». El prune sólo sabe qué borró; el inventario lo sabe el preaviso, que es otro endpoint.
+3. El doble de `tests/fake_volumes.py` **honra el `all`**. Antes lo ignoraba y borraba todo lo no usado, así que el test de limpieza pasaba en verde con el servicio sin mandar nada.
+
+
 ## 6. Plan de Tareas (Tasks)
 
 - [x] **Fase 1: Contratos y primitivo compartido**

@@ -52,6 +52,29 @@ class Settings(BaseSettings):
     # respuesta puede traer decenas de miles.
     FILES_LIST_MAX_ENTRIES: int = 2000
 
+    # Serie temporal de métricas (SPEC-17). Estos cuatro topes son los que
+    # hacen que el anillo sea un tope y no una fuga, y los valores salen de
+    # medición, no de gusto (SPEC-17 §2.6).
+
+    # Periodo del muestreador. Medido: `stats(stream=False)` tarda ~1004 ms y el
+    # daemon responde en olas de ~1 s, así que un periodo de 1 s nunca se
+    # cumpliría y cada tic se iría a 2. Con 2 s hay tic dentro de la ola.
+    METRICS_SAMPLE_INTERVAL_S: float = 2.0
+
+    # Muestras por contenedor. 450 a 2 s son 15 minutos, que es la ventana
+    # máxima que ofrece la interfaz. Tope de memoria, no de muestreo.
+    METRICS_MAX_SAMPLES: int = 450
+
+    # Anillos vivos a la vez. El límite no es arbitrario: cada anillo observado
+    # cuesta un `stats()` cada 2 s, y doce son seis llamadas por segundo al
+    # daemon. Al superarlo se expulsa el más viejo no observado; si todos lo
+    # están, observar otro más responde 409.
+    METRICS_MAX_TRACKED: int = 12
+
+    # Sin actividad ni observación, el anillo se tira entero. 30 min es más que
+    # la ventana máxima, así que un anillo al que se vuelve tiene lo que se buscar.
+    METRICS_TTL_S: int = 1800
+
     model_config = SettingsConfigDict(case_sensitive=True)
 
     @model_validator(mode="after")

@@ -239,13 +239,20 @@ class FakeDockerContainer:
             )
         return True
 
-    def _raw_stats_payload(self):
+    def _raw_stats_payload(self, en_marcha: bool = True):
         """Payload crudo de /containers/{id}/stats con valores conocidos y calculables.
 
         CPU:        dCPU=1000, dSystem=10000, online_cpus=2 -> 20.0%
         Memoria:    usage=1000, inactive_file=500, limit=10000 -> 500 B (5.0%)
         Red:        eth0 rx=300, tx=700
         Bloque:     Read=111, Write=222
+
+        `en_marcha=False` reproduce lo que se **midió** contra el daemon 29.8.2
+        (SPEC-17 §2.6): la lectura de una vez de un contenedor parado **no** da
+        409, responde 200 con un frame de aspecto normal cuyas piezas están
+        vacías. Pasado por `calculate_stats()` eso son todos los ceros, que es
+        justo la razón por la que el muestreador pregunta el estado antes de
+        medir (§4.5).
         """
         return {
             "read": "2026-09-26T10:00:00.000000000Z",
@@ -260,25 +267,43 @@ class FakeDockerContainer:
                 "system_cpu_usage": 10000,
                 "online_cpus": 2,
             },
-            "memory_stats": {
-                "usage": 1000,
-                "limit": 10000,
-                "stats": {"inactive_file": 500},
-            },
-            "networks": {"eth0": {"rx_bytes": 300, "tx_bytes": 700}},
-            "blkio_stats": {
-                "io_service_bytes_recursive": [
-                    {"op": "Read", "value": 111},
-                    {"op": "Write", "value": 222},
-                    {"op": "Sync", "value": 999},
-                ]
-            },
-            "pids_stats": {"current": 5},
+            "memory_stats": (
+                {"usage": 1000, "limit": 10000, "stats": {"inactive_file": 500}}
+                if en_marcha
+                else {}
+            ),
+            "networks": {"eth0": {"rx_bytes": 300, "tx_bytes": 700}} if en_marcha else None,
+            "blkio_stats": (
+                {
+                    "io_service_bytes_recursive": [
+                        {"op": "Read", "value": 111},
+                        {"op": "Write", "value": 222},
+                        {"op": "Sync", "value": 999},
+                    ]
+                }
+                if en_marcha
+                else {
+                    "io_service_bytes_recursive": None,
+                    "io_service_time_recursive": None,
+                    "io_wait_time_recursive": None,
+                    "io_merged_recursive": None,
+                    "io_time_recursive": None,
+                    "sectors_recursive": None,
+                }
+            ),
+            "pids_stats": {"current": 5} if en_marcha else None,
         }
 
     async def stats(self, stream=True, timeout=None):
         if self._status != "running":
-            raise DockerError(409, {"message": f"Container {self.id} is not running"})
+            # Medido en el daemon 29.8.2 (SPEC-17 §2.6): el 409 es lo que da el
+            # STREAM. La lectura de una vez responde 200 con un frame vacío, y
+            # un doble que levanta 409 en los dos casos modela mal la librería y
+            # esconde justo la trampa de la que esta spec habla.
+            if stream:
+                raise DockerError(409, {"message": f"Container {self.id} is not running"})
+            return [self._raw_stats_payload(en_marcha=False)]
+
         if not stream:
             return [self._raw_stats_payload()]
 

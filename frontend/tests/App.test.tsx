@@ -114,8 +114,19 @@ const stubFetchRespetandoFiltro = () => {
 }
 
 /** Cuántas veces se ha pedido el listado de contenedores. */
+/**
+ * Cuántas veces se pidió la LISTA de contenedores, y sólo eso.
+ *
+ * El filtro excluye `/prune` a propósito. Con un `includes('/containers')` a
+ * secas, la barra de limpieza de SPEC-21 —que pide su propio preaviso— hacía que
+ * estos tests contaran dos peticiones donde preguntan por una, y el fallo
+ * apuntaba al sitio equivocado. Un contador por prefijo ancho se rompe con
+ * cualquier sub-recurso nuevo bajo el mismo prefijo.
+ */
 const contarContenedores = (fetchMock: { mock: { calls: unknown[][] } }) =>
-  fetchMock.mock.calls.filter(([url]) => String(url).includes('/containers')).length
+  fetchMock.mock.calls.filter(
+    ([url]) => String(url).includes('/containers') && !String(url).includes('/prune')
+  ).length
 
 describe('App · conmutador de vista', () => {
   beforeEach(() => {
@@ -337,5 +348,60 @@ describe('App · conmutador de vista', () => {
     await waitFor(() => expect(screen.getByText('web-app')).toBeInTheDocument())
     expect(screen.getByRole('button', { name: /Activos/ })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Buscar por nombre, imagen o ID...')).toBeInTheDocument()
+  })
+})
+
+// --- SPEC-21: limpiar no rompe el censo -------------------------------------
+
+describe('App · limpieza de contenedores parados', () => {
+  beforeEach(() => {
+    MockWebSocket.instances = []
+    stubFetchRespetandoFiltro()
+    // @ts-expect-error Mocking WebSocket
+    global.WebSocket = MockWebSocket
+    vi.stubGlobal('matchMedia', (query: string) => new MockMediaQueryList(query))
+    localStorage.clear()
+  })
+
+  it('el botón de limpieza aparece en la barra de la pestaña de contenedores', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await waitFor(() => expect(screen.getByText('web-a')).toBeInTheDocument())
+
+    expect(screen.getByRole('button', { name: /limpiar parados/i })).toBeInTheDocument()
+  })
+
+  it('los contadores siguen siendo el censo del host, no lo que se está viendo', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await waitFor(() => expect(screen.getByText('web-a')).toBeInTheDocument())
+
+    const leer = () =>
+      screen.getAllByRole('button').flatMap((b) => {
+        const m = /^(Todos|Activos|Detenidos|Pausados)(\d+)$/.exec(
+          (b.textContent ?? '').replace(/\s+/g, '')
+        )
+        return m ? [`${m[1]} ${m[2]}`] : []
+      })
+
+    const antes = leer()
+
+    // Se filtra a Activos y luego se vuelve a Todos: los contadores no se mueven
+    // en ninguno de los dos sentidos. La limpieza llama a `refetch`, que relee
+    // la lista entera, y por eso este caso es el que importa: si el refetch
+    // respetara el filtro, el censo se quedaría corto después de limpiar.
+    fireEvent.click(screen.getByRole('button', { name: /^activos/i }))
+    await waitFor(() => expect(contarContenedores(vi.mocked(global.fetch))).toBeGreaterThan(0))
+    expect(leer()).toEqual(antes)
+
+    fireEvent.click(screen.getByRole('button', { name: /^todos/i }))
+    await waitFor(() => expect(screen.getByText('web-a')).toBeInTheDocument())
+    expect(leer()).toEqual(antes)
   })
 })

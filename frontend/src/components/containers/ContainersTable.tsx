@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import React from 'react'
-import { Box, ExternalLink, RefreshCw } from 'lucide-react'
+import { Box, ExternalLink, Eye, RefreshCw } from 'lucide-react'
 import type { ContainerSummary } from '../../types/docker'
 import { StatusBadge } from '../ui/StatusBadge'
 import { ComposeBadge } from '../compose/ComposeBadge'
@@ -79,6 +79,20 @@ export const ContainersTable: React.FC<ContainersTableProps> = ({
                   </span>
                   <span className="font-mono text-xs text-fg-muted">{c.id.slice(0, 12)}</span>
                 </div>
+                {c.observed && (
+                  // La marca va en la fila y no en una columna propia: es un dato
+                  // de un solo botón, y una columna entera para
+                  // un punto sería más tabla que información. Llega en el
+                  // listado sin pedir nada extra al daemon (SPEC-17 §4.9).
+                  <span
+                    data-testid="container-observed"
+                    title="El panel está midiendo las métricas de este contenedor aunque no tengas sus ventanas abiertas"
+                    className="mt-1 inline-flex items-center gap-1 self-start text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/20"
+                  >
+                    <Eye className="w-3 h-3" />
+                    Observando
+                  </span>
+                )}
               </td>
               <td className="py-3.5 px-4">
                 <ComposeBadge project={c.compose_project} />

@@ -53,6 +53,14 @@ export interface ContainerSummary {
   /** Proyecto Docker Compose al que pertenece, si la etiqueta existe. */
   compose_project?: string | null;
   /**
+   * Si el panel está midiendo su serie de métricas (SPEC-17).
+   *
+   * Opcional por la misma razón que `health`: un backend anterior no lo manda y
+   * tratarlo como `false` es lo correcto. Es un estado del **panel**, no del
+   * host, así que no debe influir en los contadores de las píldoras.
+   */
+  observed?: boolean;
+  /**
    * Salud del healthcheck, si el contenedor lo declara.
    *
    * Opcional a propósito aunque el backend lo mande siempre: una respuesta sin
@@ -131,5 +139,23 @@ export interface CreateContainerResponse {
   image: string;
   status: string;
   started: boolean;
+  message: string;
+}
+
+/**
+ * Contenedores parados y lo que ocupan (SPEC-21).
+ *
+ * Nombres y no ids, porque un id no lo reconoce nadie y un contenedor parado
+ * puede tener dentro lo único que hacía que mereciera la pena pararlo.
+ */
+export interface ContainerPrunePreview {
+  stopped_count: number;
+  stopped_bytes: number;
+  stopped_names: string[];
+}
+
+export interface ContainerPruneResult {
+  deleted: string[];
+  bytes_reclaimed: number;
   message: string;
 }

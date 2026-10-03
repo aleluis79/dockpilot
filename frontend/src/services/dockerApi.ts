@@ -28,6 +28,9 @@ import type {
   RenameContainerResponse,
 } from '../types/docker'
 import type { ContainerStats } from '../types/stats'
+import type { MetricsHistory, WatchResponse } from '../types/metrics'
+import type { ImagePrunePreview, ImagePruneResult } from '../types/image'
+import type { ContainerPrunePreview, ContainerPruneResult } from '../types/docker'
 import type { ListDirectoryResult } from '../types/filesystem'
 import type {
   ImageDeleteResponse,
@@ -195,6 +198,56 @@ export const dockerApi = {
   async getContainerStats(id: string): Promise<ContainerStats> {
     const res = await fetch(`${BASE_URL}/containers/${id}/stats`)
     return handleResponse<ContainerStats>(res)
+  },
+
+  /**
+   * La serie de métricas del contenedor (SPEC-17). No crea el anillo: mirar no
+   * es observar, y un `GET` no puede dejar al contenedor midiéndose.
+   */
+  async getContainerMetrics(id: string): Promise<MetricsHistory> {
+    const res = await fetch(`${BASE_URL}/containers/${id}/metrics`)
+    return handleResponse<MetricsHistory>(res)
+  },
+
+  /** Fija el contenedor para que se mida aunque nadie lo mire. */
+  async watchContainer(id: string): Promise<WatchResponse> {
+    const res = await fetch(`${BASE_URL}/containers/${id}/watch`, { method: 'POST' })
+    return handleResponse<WatchResponse>(res)
+  },
+
+  /** Lo desfija. Su serie sigue ahí hasta que expire. */
+  async unwatchContainer(id: string): Promise<WatchResponse> {
+    const res = await fetch(`${BASE_URL}/containers/${id}/watch`, { method: 'DELETE' })
+    return handleResponse<WatchResponse>(res)
+  },
+
+  /**
+   * La limpieza de imágenes (SPEC-21).
+   *
+   * `preview` NO borra nada: el backend calcula el recuento leyendo, porque
+   * preguntarle a Docker qué borraría un prune ya sería borrarlo.
+   *
+   * `all` es un parámetro de la URL y no del cuerpo, y por eso `allUntagged()`
+   * no tiene equivalente: el nivel agresivo tiene que pedirse explícitamente.
+   */
+  async previewImagePrune(): Promise<ImagePrunePreview> {
+    const res = await fetch(`${BASE_URL}/images/prune`)
+    return handleResponse<ImagePrunePreview>(res)
+  },
+
+  async pruneImages(allUntagged: boolean = false): Promise<ImagePruneResult> {
+    const res = await fetch(`${BASE_URL}/images/prune?all=${allUntagged}`, { method: 'POST' })
+    return handleResponse<ImagePruneResult>(res)
+  },
+
+  async previewContainerPrune(): Promise<ContainerPrunePreview> {
+    const res = await fetch(`${BASE_URL}/containers/prune`)
+    return handleResponse<ContainerPrunePreview>(res)
+  },
+
+  async pruneContainers(): Promise<ContainerPruneResult> {
+    const res = await fetch(`${BASE_URL}/containers/prune`, { method: 'POST' })
+    return handleResponse<ContainerPruneResult>(res)
   },
 
   async getVolumes(): Promise<VolumeSummary[]> {

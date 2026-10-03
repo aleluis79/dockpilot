@@ -221,11 +221,26 @@ class VolumeService:
     async def prune_volumes(docker: aiodocker.Docker) -> VolumePruneResult:
         """Elimina los volúmenes no utilizados.
 
-        El daemon solo borra los `dangling`, de modo que un volumen en uso
-        nunca se ve afectado aunque se solicite la limpieza.
+        **El filtro `all` no es opcional y su omisión es un bug silencioso.**
+        `POST /volumes/prune` lo define como "considera todos los volúmenes, no
+        sólo los anónimos", y **por omisión vale `false`**: sin él, un volumen con
+        nombre y sin uso —todo lo que crea un `docker run -v` o un compose— no se
+        borra nunca. El botón del panel anuncia "limpiar no usadas" sobre el
+        preaviso, que lista exactamente esos volúmenes, así que sin `all` el
+        diálogo promete y el daemon no hace nada. Es el equivalente del
+        `docker volume prune --all`, y por eso lo manda.
+
+        Y `"true"` **como cadena, no como booleano**: `clean_filters` de aiodocker
+        envuelve el valor en una lista y lo serializa tal cual, así que
+        `{"all": True}` sale como `{"all": [true]}` y el daemon responde
+        `400 invalid filter` (medido contra el 29.8.2). Con la cadena sale
+        `{"all": ["true"]}`, que es lo que espera la API.
+
+        El daemon solo borra los que no usa ningún contenedor, de modo que un
+        volumen en uso nunca se ve afectado aunque se solicite la limpieza.
         """
         try:
-            raw = await docker.volumes.prune()
+            raw = await docker.volumes.prune(filters={"all": "true"})
         except DockerError as e:
             raise HTTPException(
                 status_code=503,
@@ -247,7 +262,11 @@ class VolumeService:
             reclaimed = 0
 
         if not deleted:
-            message = "No hay volúmenes sin uso: nada que limpiar"
+            # `message` no puede afirmar que no había nada que limpiar: el prune
+            # sólo sabe qué borró, no qué había. El inventario lo sabe quien pide
+            # el preaviso, y ese es otro endpoint. Aquí la única verdad es que no
+            # se ha eliminado nada.
+            message = "El daemon no ha eliminado ningún volumen"
         elif len(deleted) == 1:
             message = f"Se liberó 1 volumen ({deleted[0]})"
         else:

@@ -66,6 +66,12 @@ class ContainerSummary(BaseModel):
         description="Proyecto Docker Compose al que pertenece, si la etiqueta existe (SPEC-11)",
     )
     health: HealthSummary = Field(default_factory=HealthSummary)
+    # `observed` es de SPEC-17 y sale de una consulta al diccionario en memoria
+    # del almacén de métricas, NO de una llamada al daemon por contenedor: el
+    # listado no puede pagar un N+1 para pintar un punto (SPEC-18 §3.1). Es un
+    # estado del panel y no del host, así que viaja en la fila y no afecta a los
+    # contadores de las píldoras, que son un censo (SPEC-17 §4.9).
+    observed: bool = Field(False, description="Si el contenedor está fijado para muestrear su serie")
 
 
 class ContainerDetail(ContainerSummary):
@@ -134,4 +140,27 @@ class CreateContainerResponse(BaseModel):
     image: str
     status: str
     started: bool
+    message: str
+
+
+class ContainerPrunePreview(BaseModel):
+    """Contenedores parados y lo que ocupan (SPEC-21).
+
+    Nombres y no ids: un id no lo reconoce nadie, y un contenedor parado puede
+    tener dentro lo único que hacía que mereciera la pena pararlo. Los bytes
+    vienen de `/system/df`, que es donde sí están; `/containers/json` no trae
+    `SizeRw` (medido en el daemon 29.8.2).
+    """
+
+    stopped_count: int = 0
+    stopped_bytes: int = 0
+    stopped_names: list[str] = Field(default_factory=list)
+
+
+class ContainerPruneResult(BaseModel):
+    """Mismos tres campos que los otros resultados de limpieza, por el mismo
+    motivo que en `ImagePruneResult`."""
+
+    deleted: list[str] = Field(default_factory=list)
+    bytes_reclaimed: int = 0
     message: str

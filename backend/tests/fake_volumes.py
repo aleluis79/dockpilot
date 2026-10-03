@@ -10,7 +10,13 @@ Fidelidad relevante para SPEC-08:
   `/system/df` y anidados bajo `UsageData`.
 """
 
+import re
+
 from aiodocker.exceptions import DockerError
+
+# Docker considera "anónimo" un volumen cuyo nombre es un hash de 64 hex, sin
+# nombre elegido por el usuario. Es el criterio que usa el `all` del prune.
+ANON_RE = re.compile(r"^[0-9a-f]{64}$")
 
 ANON_A = "aa342f746404c4a57823f40a9bccdc6cc78a2520701d2507f050b5aa5dcc9c09"
 ANON_B = "79fcfb484649ca825bef98d38e6cb6c10d10066df40a9c48a767dff6de91bff0"
@@ -93,6 +99,10 @@ class FakeDockerVolumes:
         # Volúmenes eliminados, para que prune no pueda repetirlos
         self.deleted: list[str] = []
 
+        # Los filtros que recibió cada prune, para poder comprobar que el
+        # servicio manda `all` y no confiar en que el resultado cuadre.
+        self.prune_filtros: list = []
+
     async def list(self, **kwargs) -> dict:
         """Devuelve el dict completo, igual que aiodocker: no una lista."""
         return self.list_payload
@@ -117,14 +127,29 @@ class FakeDockerVolumes:
         self.deleted.append(name)
         return True
 
-    async def prune(self, **kwargs) -> dict:
-        """Replica `POST /volumes/prune`: solo elimina los no usados."""
+    async def prune(self, *, filters=None) -> dict:
+        """Replica `POST /volumes/prune` **incluido su `all` por omisión**.
+
+        El daemon define `all` como "considera todos los volúmenes, no sólo los
+        anónimos", y **por omisión es `false`**: sin él, un volumen con nombre y
+        sin uso no se borra nunca. Un doble que ignorara los filtros haría que
+        los tests del prune pasasen con el servicio sin mandar nada, que es
+        exactamente el bug que había.
+        """
+        self.prune_filtros.append(filters)
+        # `all` llega como cadena (`"true"`), porque es como lo espera la API;
+        # se acepta el booleano por si alguien lo pasa a mano.
+        todo = bool(filters and filters.get("all") in ("true", True))
+        solo_anonimos = not todo
         reclaimed = 0
         deleted: list[str] = []
         index = self._usage_index()
         for entry in self.list_payload["Volumes"]:
             name = entry["Name"]
-            if index.get(name, {}).get("RefCount", 0) == 0:
-                reclaimed += index.get(name, {}).get("Size", 0)
-                deleted.append(name)
+            if index.get(name, {}).get("RefCount", 0) != 0:
+                continue
+            if solo_anonimos and not ANON_RE.match(name):
+                continue
+            reclaimed += index.get(name, {}).get("Size", 0)
+            deleted.append(name)
         return {"VolumesDeleted": deleted, "SpaceReclaimed": reclaimed}

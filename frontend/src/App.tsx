@@ -6,6 +6,7 @@ import { useContainers } from './hooks/useContainers'
 import type { ContainerSummary } from './types/docker'
 import { Navbar } from './components/layout/Navbar'
 import { ContainersTable } from './components/containers/ContainersTable'
+import { ContainersToolbar } from './components/containers/ContainersToolbar'
 import { ContainerDetailModal } from './components/containers/ContainerDetailModal'
 import { DeleteConfirmModal } from './components/containers/DeleteConfirmModal'
 import { LogsModal } from './components/logs/LogsModal'
@@ -39,6 +40,7 @@ function App() {
     actionInProgress,
     refetch,
     renameLocal,
+    setObservedLocal,
     executeAction,
   } = useContainers({ activo: activeView === 'containers' })
 
@@ -221,16 +223,23 @@ function App() {
               )}
             </div>
 
-            {/* Barra de Búsqueda */}
-            <div className="relative w-full sm:w-72">
-              <Search className="w-4 h-4 text-fg-muted absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="Buscar por nombre, imagen o ID..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-1.5 text-xs bg-surface border border-default rounded-xl text-fg placeholder-fg-muted focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 transition-all"
-              />
+            {/* Barra de búsqueda y limpieza (SPEC-21). La limpieza va aquí y no
+                en una vista propia porque la tabla de contenedores no la tiene:
+                se renderiza desde este `App`. El botón avisa con `refetch` para
+                que el censo entero se vuelva a leer, y los contadores de las
+                píldoras no dependen de lo que se esté viendo (SPEC-18 §3.2). */}
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
+              <div className="relative w-full sm:w-72">
+                <Search className="w-4 h-4 text-fg-muted absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="Buscar por nombre, imagen o ID..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-4 py-1.5 text-xs bg-surface border border-default rounded-xl text-fg placeholder-fg-muted focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 transition-all"
+                />
+              </div>
+              <ContainersToolbar onDeleted={refetch} />
             </div>
           </div>
 
@@ -273,11 +282,14 @@ function App() {
         onClose={() => setContainerForLogs(null)}
       />
 
-      {/* Modal de Métricas en Vivo */}
+      {/* Modal de Métricas en Vivo. `setObservedLocal` mantiene la píldora
+          «Observando» de la tabla al día sin refetchar: el backend ya confirmó
+          el valor en la respuesta del `watch` (SPEC-17 §4.9). */}
       <StatsModal
         isOpen={!!containerForStats}
         container={containerForStats}
         onClose={() => setContainerForStats(null)}
+        onObservedChange={setObservedLocal}
       />
 
       {/* Modal de Terminal Interactivo */}

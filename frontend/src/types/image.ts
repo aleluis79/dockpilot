@@ -75,3 +75,41 @@ export interface ImageDeleteResponse {
   untagged: string[];
   message: string;
 }
+
+/**
+ * Qué se borraría con cada nivel de limpieza, y cuánto (SPEC-21).
+ *
+ * Los `bytes` son una **cota superior**, no una promesa: el backend suma el
+ * `Size` de cada imagen y dos imágenes pueden compartir capas. Por eso la
+ * interfaz escribe «hasta» delante del número, igual que el plan de un build
+ * de SPEC-15.
+ */
+export interface ImagePrunePreview {
+  /** Sin etiqueta y sin contenedores que la usen: el nivel seguro. */
+  dangling_count: number;
+  dangling_bytes: number;
+  dangling_ids: string[];
+  /** Con etiqueta y sin uso: borrarlas obliga a volver a descargarlas. */
+  tagged_count: number;
+  tagged_bytes: number;
+  tagged_refs: string[];
+  /** Sin etiqueta pero en uso: el daemon no las borrará. */
+  in_use_dangling: number;
+}
+
+export interface ImagePruneResult {
+  deleted: string[];
+  /** En el nivel agresivo es una **estimación** (la suma de los `Size`), no lo que
+   *  el daemon dice que recuperó: un borrado uno a uno no lleva ese dato. */
+  bytes_reclaimed: number;
+  message: string;
+  /**
+   * Etiquetas que el daemon no dejó borrar, con su motivo.
+   *
+   * Existe porque el nivel agresivo es un bucle y puede fallar a medias: el caso
+   * normal es que alguien haya arrancado un contenedor con esa imagen entre el
+   * preaviso y el botón. Sin esta lista, un «3 de 6» obligaría a adivinar
+   * cuáles y el usuario podría creer que se han borrado seis.
+   */
+  kept: string[];
+}

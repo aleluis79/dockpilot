@@ -279,8 +279,61 @@ El botón vive en el **detalle**, no en la fila, y no por falta de espacio: el b
 
 Un aviso que aparece **después** de la acción no es un aviso, es una disculpa. El de contenedor en marcha pide confirmación: no bloquea (subir a un parado es legítimo) pero para subir hay que haberlo leído.
 
-#### Trampa: un búfer de stream sin tope no es sólo memoria
+#### Trampa: `stats(stream=False)` no es una lectura, es una espera de un segundo (SPEC-17)
 
+Medido en el daemon 29.8.2 (§2.6 de la spec): **`stats(stream=False)` tarda ~1004 ms**, y el daemon responde en **olas de ~1 s**. No es una lectura de un valor: es una espera a la siguiente recolección. Dos consecuencias, y las dos son la diferencia entre un muestreador que funciona y uno que no:
+
+- **Las lecturas tienen que ir en un `gather`.** Secuencial, un tic con doce observados duraría 12 s y nunca volvería a su periodo de 2 s. Medido: 2 a 12 lecturas concurrentes salen en la **misma** ola, ~2005 ms en total, así que leer doce en paralelo cuesta lo mismo que leer dos.
+- **El estado se pregunta una vez por tic, no una por contenedor.** `containers.list()` son 16-26 ms para todos; `show()` son 0,3 ms pero son N llamadas. El `list()` es una llamada por tic y además filtra por `all=False`, así que "no sale en el listado" ya es la respuesta que se necesita.
+
+#### Trampa: un contenedor parado NO da 409 en la lectura de una vez (SPEC-17)
+
+`StatsService.get_stats()` comprobaba el estado por su cuenta y devolvía ceros, y su `except` tenía un `409` que **nunca llegaba**: `stats(stream=False)` sobre un contenedor parado responde **200** con un frame de aspecto normal cuyas piezas están vacías —`memory_stats {}`, `networks None`, `blkio_* None`, CPU a 0—. Pasado por `calculate_stats()` eso da **todos los ceros**, que en una gráfica afirman "no usa CPU" cuando lo cierto es "no se está midiendo porque está parado". El `409` es lo que da **`stream=True`**, que es otro camino.
+
+El doble de `tests/conftest.py` levantaba `DockerError(409)` en los dos casos, así que modelaba mal la librería y **tapaba justo la trampa**. Ahora el doble devuelve el frame vacío para `stream=False` y el 409 sólo para el stream.
+
+La regla que sale: **el estado se pregunta, no se deduce de las muestras**, y un hueco es un hueco. Es el mismo principio de SPEC-18 con `"none"` y `"healthy"`: la ausencia de dato y el dato de valor cero son cosas distintas.
+
+#### Trampa: el eje de un gráfico por índice miente en cuanto hay un hueco (SPEC-17)
+
+`StatsSparkline` colocaba el punto *i* en `i / (n - 1)`, y eso sólo es cierto si **todas** las muestras están separadas por lo mismo. Con un anillo deja de serlo: hay huecos por un contenedor parado, por un tic perdido y por un tic que el demonio tardó 9 s. La abscisa es `(t - t₀) / (t_fin - t₀)`, y una ventana de 5 minutos pintada sobre lo que hay parece más corta cuanto más antiguo sea el anillo.
+
+Y al revés de lo que parece: **tres cosas que no son un cero**, y las tres tienen su tipo en el contrato porque un `0` dibujado es una afirmación falsa:
+
+| Lo que pasa | Cómo se representa |
+| :--- | :--- |
+| Primera muestra: no hay con quién compararse | `valor: null` |
+| El contenedor se reinició y el contador bajó | `corte: true`, y el trazo se parte en dos `path` |
+| Pasó más de 2,5 intervalos | Hueco: distancia en `t`, y el trazo se parte |
+
+El `StatsSparkline` se queda como estaba, con su eje por índice: para veinte lecturas seguidas sin huecos es correcto, y reutilizarlo para la serie habría sido meterle el problema en lugar de dejarlo donde no lo tiene.
+
+#### El backend dejó de ser sin estado, y hay que decirlo (SPEC-17)
+
+`MetricsStore` es el primer dato que el backend **recuerda** entre peticiones. Hasta SPEC-17 lo que había era un cliente de Docker, que es una conexión y no estado. El anillo es memoria con topes (`METRICS_MAX_SAMPLES`, `METRICS_MAX_TRACKED`, `METRICS_TTL_S`) y **no sobrevive a reiniciar el panel**, y eso se dice en la interfaz y en la ayuda, no se disimula.
+
+Lo que hizo que valiera la pena meterse en el backend no es el almacenamiento sino el **pin**: un anillo que sólo se rellena mientras hay alguien mirando es el búfer del navegador con más pasos. Observando un contenedor se sigue midiendo con el modal cerrado. Sin esa pieza, la decisión habría sido la contraria y más barata.
+
+Tres reglas de su estructura:
+
+- **`MetricsStore.append()` es el único escritor.** El WebSocket de métricas no lo llama: el stream en vivo sigue llegando al cliente tal cual y el historial viaja antes, como un mensaje con `type` (`{"type": "history", "history": {...}}`). La asimetría —lo que no es muestra en vivo lleva `type`— es deliberada y la fija el orden.
+- **El id se normaliza a corto dentro del propio almacén.** Un módulo que recorta el id y otro que no son dos reglas, y se discrepan en cuanto uno recibe el id entero.
+- **El tope de anillos se aplica al crear el anillo, no en `observe()`.** Si sólo estuviera en `observe()`, un `append()` sobre un id nuevo lo esquivaría y el número de anillos dejaría de estar acotado. El que se expulsa es siempre el más viejo **no observado**: apagar un histórico que alguien pidió sería peor que no acomodar la petición.
+
+#### Trampa: `POST /volumes/prune` sin `all` no hace NADA, y el botón no lo dice
+
+El daemon define un parámetro `all` en `POST /volumes/prune` que significa «considera **todos** los volúmenes, no sólo los anónimos», y **por omisión vale `false`**. Sin él, un volumen con nombre y sin uso —todo lo que crea un `docker run -v` o un compose— no se borra nunca. Es el equivalente a `docker volume prune --all`, y sin la `a` el CLI tampoco los toca.
+
+El síntoma es el peor posible porque **no se parece a un error**: el botón anunciaba «4 volúmenes · 120 MB», el daemon respondía `{"VolumesDeleted": null, "SpaceReclaimed": 0}`, y el panel pintaba «No hay volúmenes sin uso: nada que limpiar». El preaviso y la acción discrepaban, y el mensaje afirmaba algo que el `prune` no puede saber: **el prune sólo sabe qué borró, no qué había**. Quien sabe el inventario es el endpoint del preaviso, que es otro.
+
+Dos cosas más que salieron de arreglarlo:
+
+- **`{"all": True}` es un `400 invalid filter`.** `clean_filters` de aiodocker envuelve el valor en una lista y lo serializa tal cual, así que el booleano sale como `{"all": [true]}`; la API quiere `{"all": ["true"]}`. Hay que mandar la **cadena**. No es teórico: rompía también el nivel agresivo de la limpieza de imágenes de SPEC-21, y el test lo fijaba con el valor equivocado porque nadie lo había ejecutado contra el daemon.
+- **El doble de `tests/fake_volumes.py` ignoraba los filtros** y borraba todo lo no usado. Con eso, `test_prune_only_removes_unused` pasaba en verde con el servicio sin mandar nada: el test verde y el panel roto a la vez. Es la tercera vez que esta misma trampa aparece en el proyecto —etiquetas de compose, `/stats` de un contenedor parado, y ahora el `all` del prune—, y por eso el doble ahora honra el `all` de verdad y hay un test que lo comprueba.
+
+La lección de fondo es la de siempre y no por deja vu: **`all: false` por omisión y un resultado vacío son indistinguibles de «no había nada»**. Cuando una operación destructiva devuelve un resultado vacío, el mensaje sólo puede decir lo que la operación sabe.
+
+#### Trampa: un búfer de stream sin tope no es sólo memoria
 El visor de logs de contenedor corta a 2000 entradas. El de compose **no cortaba nada**, y `ComposeLogsViewer` vuelve a trocear el historial entero en cada fragmento: un `logs --follow` de un servicio que parlaba mucho se convertía en O(n²) de CPU además de un heap sin límite.
 
 `utils/buffer.ts` tiene `acumular()`, una función pura que devuelve un array nuevo recortado por el frente. Pura a propósito: si devolviera el mismo array, React lo compararía por identidad y no re-renderizaría aunque los datos cambiasn. **Todas** las ramas de inserción tienen que pasar por ella, incluida la de texto plano: `useDockerLogs` tenía el recorte en la rama JSON y no en la del `catch`, así que cualquier frame que no se supiera parsear crecía sin límite.
@@ -303,7 +356,7 @@ Y hay una regla fácil de romper en el mismo hook: **el filtro de estado se apli
 
 **El guard de tokens también escanea atributos de SVG.** Antes solo buscaba clases de utilidad en el `className`, así que un `stroke="#3b82f6"` pasaba desapercibido — y no era hipotético: los sparklines de CPU y memoria de `StatsModal` llevaban dos hexos fijos que **no cambiaban con el tema**. Un `div` con `width` porcentual o un `<path stroke>` llevan el color como **atributo de estilo**, no como clase, y por eso hacen falta las dos comprobaciones.
 
-Las gráficas del sistema son census: instantáneas, sin histórico. **No hay series temporales** porque el backend es sin estado y no tiene buffer; y `cpu_percent` va multiplicado por `online_cpus`, así que 100% es *un* núcleo y sin dividir por `NCPU` una gráfica de host daría 1200 %.
+Las gráficas del sistema son census: instantáneas, sin histórico. **No hay series temporales del host** y no las habrá: `cpu_percent` va multiplicado por `online_cpus`, así que 100% es *un* núcleo y sin dividir por `NCPU` una gráfica de host daría 1200 %. El histórico **por contenedor** sí existe desde SPEC-17, con su anillo en memoria, y su límite es el mismo que éste: son de cosas distintas.
 
 ### Backend
 - **Framework**: FastAPI (Python 3.12+).
@@ -339,17 +392,19 @@ dockpilot/
 │   ├── 14-compose-file-browser.md # Spec: Explorador de archivos compose (elegir ruta sin copiarla)
 │   ├── 15-compose-deploy-from-plan.md # Spec: Desplegar un compose file desde el plan (up, coste de build)
 │   ├── 16-host-census-dashboard.md  # Spec: Panel de censo del host con barras apiladas
+│   ├── 17-temporal-series.md    # Spec: Serie temporal de métricas por contenedor (anillo en memoria, observar)
 │   ├── 18-container-healthchecks.md  # Spec: Salud del healthcheck en listado, detalle y filtro
 │   ├── 19-container-rename.md       # Spec: Renombrar un contenedor desde su detalle
-│   └── 16-host-census-dashboard.md # Spec: Dashboard de censo del host (barras, paleta de gráfico)
+│   ├── 20-container-files.md         # Spec: Explorar y copiar ficheros de un contenedor
+│   └── 21-prune-images-containers.md # Spec: Limpieza de imágenes y contenedores parados
 ├── backend/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── v1/
 │   │   │   │   ├── compose.py      # REST de compose: /projects, /projects/{name}, POST /plan, GET /browse
 │   │   │   │   ├── ws.py           # + /ws/compose/{action} (SPEC-13)
-│   │   │   │   ├── containers.py   # REST de contenedores + /{id}/stats
-│   │   │   │   ├── images.py       # REST de imágenes: local, search, detalle, borrado
+│   │   │   │   ├── containers.py   # REST de contenedores + /{id}/stats + /prune (SPEC-21)
+│   │   │   │   ├── images.py       # REST de imágenes: local, search, detalle, borrado, /prune (SPEC-21)
 │   │   │   │   ├── networks.py     # REST de redes: listado, detalle, alta, prune, borrado
 │   │   │   │   ├── system.py       # REST de sistema: /info, /df, /overview
 │   │   │   │   ├── volumes.py      # REST de volúmenes: listado, detalle, prune, borrado
@@ -370,6 +425,9 @@ dockpilot/
 │   │   │   └── volume.py
 │   │   ├── services/
 │   │   │   ├── container_files_service.py  # Listado por `ls` y copia en ambos sentidos (SPEC-20)
+│   │   │   ├── metrics_store.py    # Anillo en memoria, topes, TTL y pin (SPEC-17)
+│   │   │   ├── metrics_sampler.py  # Una sola tarea que mide los observados (SPEC-17)
+│   │   │   ├── image_service.py    # Inventario, detalle y limpieza de imágenes (SPEC-21)
 │   │   │   ├── compose_cli.py      # ÚNICO módulo que lanza procesos (SPEC-12)
 │   │   │   ├── compose_service.py  # Inventario (SPEC-11), build_plan (SPEC-12) y el confinamiento
 │   │   │                      # de rutas que comparten browse, plan y ciclo de vida (SPEC-14)
@@ -404,11 +462,11 @@ dockpilot/
 │   ├── src/
 │   │   ├── components/
 │   │   │   ├── layout/            # Navbar, ThemeProvider, ThemeToggle
-│   │   │   ├── ui/                # StatusBadge, modalOverlay (velo compartido)
-│   │   │   ├── containers/        # Tabla, acciones y modales de contenedor (incluido ContainerFilesModal, SPEC-20)
+│   │   │   ├── ui/                # StatusBadge, modalOverlay (velo compartido), PruneDialog (SPEC-21)
+│   │   │   ├── containers/        # Tabla, barra con la limpieza (SPEC-21), acciones y modales
 │   │   │   ├── terminal/          # TerminalModal, TerminalViewer, temas de xterm
 │   │   │   ├── logs/              # LogsModal, LogsViewer
-│   │   │   ├── stats/             # StatsModal, StatsSparkline
+│   │   │   ├── stats/             # StatsModal, StatsSparkline, MetricChart (SPEC-17)
 │   │   │   ├── images/            # ImagesView, ImagesTable, PullImageModal, ImageDetailModal
 │   │   │   ├── volumes/           # VolumesView, VolumesTable, VolumeDetailModal
 │   │   │   ├── networks/          # NetworksView, NetworksTable, CreateNetworkModal, NetworkDetailModal
@@ -419,12 +477,14 @@ dockpilot/
 │   │   │   │                     # ComposeDownDialog, ComposeLogsViewer, ComposeFilePicker,
 │   │   │                     # ComposeActionPanel, ComposeDeployDialog
 │   │   │   └── help/              # HelpModal
-│   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats, useTheme, useImagePull,
+│   │   ├── hooks/                 # useContainers, useDockerLogs, useDockerStats (historial + observado, SPEC-17),
+│   │                         # usePrune (los dos preavisos de limpieza, SPEC-21), useTheme, useImagePull,
 │   │   │                         # useNetworks, useSystemOverview, useComposeProjects, useComposeCommand
 │   │   ├── services/              # dockerApi.ts, wsUrl.ts
 │   │   ├── types/                 # docker.ts, log.ts, terminal.ts, stats.ts, theme.ts, image.ts, volume.ts, network.ts, system.ts, compose.ts, filesystem.ts
-│   │   ├── utils/                 # format.ts (formatBytes, formatPercent), compose.ts (rutaDeProyecto),
+│   │   ├── utils/                 # format.ts (formatBytes, formatPercent, formatRate), compose.ts (rutaDeProyecto),
 │   │   │                         # buffer.ts (acumular: búfer acotado para streams),
+│   │   │                         # rates.ts (tasa, ventana y roturas de una serie, SPEC-17),
 │   │   │                         # containerName.ts (reglas de nombre de contenedor, SPEC-19)
 │   │   ├── App.tsx
 │   │   ├── main.tsx

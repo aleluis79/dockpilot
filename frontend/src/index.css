@@ -44,6 +44,23 @@
   --color-chart-volumes: var(--dp-chart-volumes);
   --color-chart-cache: var(--dp-chart-cache);
   --color-chart-reclaimable: var(--dp-chart-reclaimable);
+
+  /* Tasas (SPEC-17 §2.4). Son magnitudes distintas de las de censo: SPEC-16
+     colorea cosas que ocupan disco (una imagen, un volumen, la caché) y esto
+     colorea flujos. Reutilizar un tono de censo aquí haría que "imágenes" y
+     "bytes recibidos" significaran lo mismo en dos gráficas distintas, que es
+     justo lo que un color semántico no puede hacer.
+
+     Los cuatro tonos son de familias que SPEC-16 no usa (teal, rose, cyan y
+     fuchsia), porque los que sobraban ya estaban tomados: el ámbar de "pausado"
+     y el naranja de "recuperable" se parecían demasiado a un flujo de E/S. Los
+     dos pares tienen contraste alto entre sí, que es lo que hace falta para
+     leerlos superpuestos; entre pares hay tonos cercanos y no pasa nada, porque
+     red y disco no se pintan nunca en la misma gráfica. */
+  --color-chart-net-in: var(--dp-chart-net-in);
+  --color-chart-net-out: var(--dp-chart-net-out);
+  --color-chart-io-read: var(--dp-chart-io-read);
+  --color-chart-io-write: var(--dp-chart-io-write);
 }
 
 /* Valores por defecto = tema OSCURO, para que la interfaz no cambie de
@@ -72,6 +89,13 @@
   --dp-chart-volumes: #f472b6; /* pink-400 */
   --dp-chart-cache: #94a3b8; /* slate-400 */
   --dp-chart-reclaimable: #fb923c; /* orange-400 */
+
+  /* Tasas. En claro se oscurecen, por el mismo motivo que la paleta de SPEC-16:
+     sobre un fondo casi blanco un tono de 400 se lava. */
+  --dp-chart-net-in: #0f766e; /* teal-700 */
+  --dp-chart-net-out: #be123c; /* rose-700 */
+  --dp-chart-io-read: #0e7490; /* cyan-700 */
+  --dp-chart-io-write: #a21caf; /* fuchsia-700 */
 }
 
 /* Tema claro: se aplica por ausencia de la clase `dark`, no con una clase
@@ -98,6 +122,13 @@ html:not(.dark) {
   --dp-chart-volumes: #be185d; /* pink-700 */
   --dp-chart-cache: #475569; /* slate-600 */
   --dp-chart-reclaimable: #c2410c; /* orange-700 */
+
+  /* En claro se oscurecen, por el mismo motivo que la paleta de SPEC-16: sobre
+     un fondo casi blanco un tono de 400 se lava. */
+  --dp-chart-net-in: #0f766e; /* teal-700 */
+  --dp-chart-net-out: #be123c; /* rose-700 */
+  --dp-chart-io-read: #0e7490; /* cyan-700 */
+  --dp-chart-io-write: #a21caf; /* fuchsia-700 */
 }
 
 /* Barras de desplazamiento derivadas de los tokens */

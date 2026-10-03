@@ -83,3 +83,46 @@ class ImageDeleteResponse(BaseModel):
         default_factory=list, description="Tags que han quedado sin referenciar"
     )
     message: str
+
+
+class ImagePrunePreview(BaseModel):
+    """Qué se iría con cada nivel de limpieza (SPEC-21).
+
+    Se calcula leyendo `GET /images/json`, no preguntando a un prune: no hay
+    forma de preguntarle a Docker qué borraría sin borrarlo. Por eso es una
+    **cota superior** y no una promesa, y por eso `in_use_dangling` va aparte:
+    una imagen sin etiqueta que usa un contenedor no es podable, y contarla
+    entre las que sí lo son haría mentir al diálogo justo en el número que el
+    usuario está mirando.
+    """
+
+    # Nivel seguro: sin etiqueta y sin contenedores que la usen.
+    dangling_count: int = 0
+    dangling_bytes: int = Field(0, description="Cota superior: las capas compartidas se cuentan dos veces")
+    dangling_ids: list[str] = Field(default_factory=list)
+    # Nivel agresivo: con etiqueta, y por tanto volver a descargables.
+    tagged_count: int = 0
+    tagged_bytes: int = Field(0, description="Cota superior, por el mismo motivo")
+    tagged_refs: list[str] = Field(default_factory=list)
+    in_use_dangling: int = Field(0, description="Imágenes sin etiqueta en uso: el daemon no las borrará")
+
+
+class ImagePruneResult(BaseModel):
+    """Los mismos tres campos que `VolumePruneResult` y `NetworkPruneResult`, y
+    con el mismo nombre, más uno que sólo este endpoint necesita.
+
+    `kept` existe porque **el nivel agresivo es un bucle**, no una llamada: borra
+    imagen a imagen con `DELETE /images/{id}`, y cada una puede fallar por su
+    cuenta —el caso normal es que alguien haya arrancado un contenedor con esa
+    imagen entre el preaviso y el botón—. Un resultado que sólo dijera «3 de 6»
+    obligaría al usuario a adivinar cuáles tres; los nombres de las que se
+    quedaron son la información que falta para decidir si reintentar.
+    """
+
+    deleted: list[str] = Field(default_factory=list)
+    bytes_reclaimed: int = Field(0, description="Espacio recuperado en bytes")
+    message: str
+    kept: list[str] = Field(
+        default_factory=list,
+        description="Etiquetas que el daemon no dejó borrar, con su motivo",
+    )

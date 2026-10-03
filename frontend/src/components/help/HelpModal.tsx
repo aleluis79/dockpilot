@@ -244,8 +244,23 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                     host reparte el espacio entre imágenes, volúmenes, caché y
                     contenedores, enseña qué parte es recuperable y compara los
                     mayores consumidores con barras. Son fotos del momento, no
-                    histórico: no guarda series de CPU ni de memoria, porque eso
-                    necesita acumular muestras en el servidor y aquí no se hace.
+                    histórico: eso es una decisión, porque sumar los contenedores
+                    y llamarlo «host» daría un número que no es el del
+                    ordenador. El histórico de cada contenedor sí está, en sus
+                    propias métricas.
+                    <br />
+                    <br />
+                    <strong className="text-fg">Observar</strong> un contenedor —el
+                    botón con el ojo, en sus métricas— deja que el panel lo siga
+                    midiendo aunque cierres la ventana, y su curva sigue ahí cuando
+                    vuelvas. Se puede observar un máximo de 12 a la vez. El
+                    histórico dura lo que dure el panel: vive en memoria, así que
+                    reiniciarlo lo borra, y por eso un gráfico vacío dice por qué
+                    está vacío en vez de fingir que no ha pasado nada. Las curvas
+                    de red y disco son bytes por segundo: salen de restar dos
+                    lecturas, y cuando el contenedor se reinicia la línea se
+                    parte, porque entre el antes y el después no hay una caída
+                    real sino un corte.
                     <br />
                     <br />
                     <strong className="text-fg">Seleccionar archivo</strong> abre un
@@ -286,9 +301,12 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                     <Trash2 className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-px" />
                     <span>
                       <strong className="text-fg">Limpiar sin uso</strong> en
-                      volúmenes o redes elimina de golpe todo lo que no está en
-                      uso. El diálogo indica cuántos son y cuánto espacio se
-                      recupera, pero una vez confirmado no hay vuelta atrás.
+                      volúmenes, redes, imágenes o contenedores parados elimina
+                      de golpe todo lo que no está en uso. El diálogo indica
+                      cuántos son y cuánto espacio se recupera —hasta, porque las
+                      capas compartidas se cuentan dos veces—, pero una vez
+                      confirmado no hay vuelta atrás. En contenedores se lleva
+                      además la capa de escritura.
                     </span>
                   </li>
                   <li className="flex gap-2.5">
@@ -324,7 +342,11 @@ export const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
                   <code className="font-mono">host</code> y{' '}
                   <code className="font-mono">bridge</code>). Las redes
                   predefinidas <strong className="text-fg">no se tocan</strong> en
-                  la limpieza. En compose, bajar un proyecto{' '}
+                  la limpieza, y en la de imágenes{' '}
+                  <strong className="text-fg">tampoco se toca ninguna imagen que
+                  esté usando un contenedor</strong>: lo decide el daemon, no el
+                  panel. Por eso puede haber imágenes sin etiqueta que el panel
+                  dice que no puede borrar. En compose, bajar un proyecto{' '}
                   <strong className="text-fg">nunca</strong> borra volúmenes
                   salvo que se marque expresamente la opción: por defecto se lleva
                   contenedores y red y deja los datos intactos.

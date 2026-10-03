@@ -170,3 +170,34 @@ describe('ContainersTable con salud', () => {
     expect(screen.queryByTestId('salud-badge')).not.toBeInTheDocument()
   })
 })
+
+// --- La marca de observado (SPEC-17 §4.9) -----------------------------------
+
+describe('ContainersTable · observado', () => {
+  const base = {
+    image: 'nginx:alpine',
+    status: 'running',
+    state: 'Up 2 hours',
+    created: 1727290000,
+    ports: [],
+  }
+
+  it('marca el contenedor observado', () => {
+    render(<ContainersTable containers={[{ ...base, id: 'c1', name: 'web', observed: true }]} onSelect={vi.fn()} />)
+
+    expect(screen.getAllByTestId('container-observed')).toHaveLength(1)
+    expect(screen.getByText('Observando')).toBeInTheDocument()
+  })
+
+  it('no marca los que no lo están', () => {
+    render(<ContainersTable containers={[{ ...base, id: 'c1', name: 'web', observed: false }]} onSelect={vi.fn()} />)
+
+    expect(screen.queryByTestId('container-observed')).not.toBeInTheDocument()
+  })
+
+  it('un contenedor sin el campo no se marca: el backend viejo no lo manda', () => {
+    render(<ContainersTable containers={[{ ...base, id: 'c1', name: 'web' }]} onSelect={vi.fn()} />)
+
+    expect(screen.queryByTestId('container-observed')).not.toBeInTheDocument()
+  })
+})

@@ -24,6 +24,7 @@ from app.schemas.log import LogEntry
 from app.services import compose_cli, compose_service
 from app.services.container_service import ContainerService
 from app.services.image_service import ImageService, normalize_image_ref, pull_error_code
+from app.services.metrics_store import get_store
 from app.services.stats_service import StatsService
 
 DockerDep = Annotated[aiodocker.Docker, Depends(get_docker)]
@@ -191,6 +192,13 @@ async def container_stats_ws(
         return
 
     try:
+        # El historial va PRIMERO, antes de la primera muestra en vivo, y es lo
+        # que fija el orden del canal: cuando llega la muestra, el cliente ya
+        # tiene el pasado y no puede acabar con dos series para el mismo punto
+        # (SPEC-17 §3.2). La asimetría es deliberada —lo que no es muestra en
+        # vivo lleva `type`— y la muestra en vivo no cambia de contrato.
+        await websocket.send_json({"type": "history", "history": get_store().get(container_id).model_dump()})
+
         # aclosing garantiza el cierre del generador de Docker y la liberación del socket
         # underlying en cuanto el cliente se desconecta.
         stats_stream = StatsService.stream_stats(container, container_id, c_name)

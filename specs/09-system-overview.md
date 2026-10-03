@@ -293,9 +293,7 @@ Si `total_size` es `0` (daemon recién arrancado, o un tipo sin nada) el porcent
 ### Verificación manual
 - [x] Contrastar las cifras del panel con `docker system df` en una terminal: verificado contra el
   daemon real, los agregados y los mayores consumidores coinciden.
-- [ ] Comprobar que el porcentaje recuperable refleja la realidad tras limpiar imágenes no usadas.
-  Queda pendiente: requiere una limpieza real, que es decisión del usuario y no se ejecuta en las
-  verificaciones. El cálculo ya está cubierto por tests unitarios con total `0` y con total normal.
+- [x] Comprobar que el porcentaje recuperable refleja la realidad tras limpiar imágenes no usadas. **Hecho en SPEC-21, y salió con un matiz que esta spec noiba a prever: el `df` y lo que da el botón no son lo mismo.** El `df` cuenta como recuperable toda imagen sin uso (**con y sin etiqueta**): 4,31 GB en el host de referencia, mientras que la limpieza segura da 769 MiB. Los dos números son correctos y no se pueden reproducir uno desde el otro, porque `SharedSize` sale como `-1` y las capas compartidas no se pueden descontar (SPEC-21 §4.2). El cálculo del porcentaje ya estaba cubierto por tests unitarios con total `0` y con total normal.
 
 ---
 

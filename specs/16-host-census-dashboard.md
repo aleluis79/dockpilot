@@ -12,7 +12,7 @@
     - Una **paleta de gráfico** en el sistema de temas, para que las gráficas sigan al modo claro y oscuro.
     - **Cerrar el agujero del guard de tokens**, que hoy no escanea atributos `stroke` y `fill` de un SVG.
   - No incluye (en esta spec):
-    - **Series temporales.** CPU, memoria, red y disco en el tiempo necesitan histórico, y no hay ninguno: el backend es sin estado, sin base de datos y sin buffer. Es SPEC-17, y allí habrá que decidir si el buffer vive en el navegador o en el backend.
+    - **Series temporales del host.** CPU, memoria, red y disco en el tiempo necesitan histórico. **El del host sigue sin hacerlo y no hay quién lo haga**: `GET /containers/{id}/stats` es por contenedor y su `cpu_percent` va multiplicado por `online_cpus`, así que 100 % es *un* núcleo y sumar contenedores y llamarlo «host» mentiría. El histórico **por contenedor** es SPEC-17, y vive en un anillo en memoria en el backend; el límite de esta spec es que el gráfico es de censo del host y el otro es de un contenedor.
     - **Uso de CPU o memoria del host.** `GET /containers/{id}/stats` es **por contenedor**, y su `cpu_percent` va multiplicado por `online_cpus`, así que 100% es *un* núcleo saturado. Sumar contenedores y llamarlo «host» sería mentir: Docker solo contabiliza lo suyo, y en un equipo con otras cosas corriendo la gráfica no reflejaría el host.
     - **Red y E/S en el tiempo.** `network_rx_bytes` y `block_write_bytes` son contadores acumulados desde el arranque; su línea sería una rampa monótona. Hace falta deltas entre muestras, o sea, histórico.
     - **Proyectos compose en este panel.** Requeriría una segunda fuente de datos en un panel que hoy solo habla del host, y ataría SPEC-11 a la vista de sistema. Las compose tienen su propia pestaña.

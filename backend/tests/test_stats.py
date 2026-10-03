@@ -181,9 +181,19 @@ async def test_container_stats_rest_stopped_returns_zeros(async_client: AsyncCli
 
 
 def test_container_stats_ws_stream(test_client: TestClient):
-    """Escenario: Streaming de estadísticas mediante WebSocket."""
+    """Escenario: Streaming de estadísticas mediante WebSocket.
+
+    Desde SPEC-17 el canal manda primero el historial y después las muestras en
+    vivo. La muestra conserva su contrato entero —mismos campos, sin `type`— y
+    lo que se comprueba aquí es que sigue siendo la misma.
+    """
     with test_client.websocket_connect("/ws/containers/c123/stats") as ws:
+        historial = ws.receive_json()
+        assert historial["type"] == "history"
+        assert historial["history"]["container_id"] == "c123"
+
         first = ws.receive_json()
+        assert "type" not in first
         assert first["container_id"] == "c123"
         assert first["container_name"] == "web-app"
         assert first["cpu_percent"] == pytest.approx(20.0)

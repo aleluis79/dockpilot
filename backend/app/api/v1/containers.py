@@ -10,6 +10,8 @@ from app.core.docker import docker_error_message, docker_error_status, get_docke
 from app.schemas.container import (
     ContainerActionResponse,
     ContainerDetail,
+    ContainerPrunePreview,
+    ContainerPruneResult,
     ContainerSummary,
     CreateContainerRequest,
     CreateContainerResponse,
@@ -17,10 +19,12 @@ from app.schemas.container import (
     RenameContainerResponse,
 )
 from app.schemas.filesystem import ListDirectoryResult
+from app.schemas.metrics import MetricsHistory, WatchResponse
 from app.schemas.stats import ContainerStats
 from app.services import container_files_service as ContainerFiles
 from app.services.container_files_service import ContainerFilesService
 from app.services.container_service import ContainerService
+from app.services.metrics_store import get_store
 from app.services.stats_service import StatsService
 
 DockerDep = Annotated[aiodocker.Docker, Depends(get_docker)]
@@ -75,6 +79,38 @@ async def list_containers(
     )
 
 
+# --- Limpieza (SPEC-21) ------------------------------------------------------
+#
+# `/prune` va ANTES que `/{container_id}` y el orden no es una cuestión de estilo:
+# FastAPI empareja por el orden de declaración, así que un `GET /containers/prune`
+# declarado después se interpretaría como el detalle de un contenedor llamado
+# `prune` y devolvería un 404 sobre un contenedor que no existe. Hay un test que
+# lo fija, porque es un fallo que no se ve leyendo el router.
+@router.get("/prune", response_model=ContainerPrunePreview)
+async def preview_container_prune(
+    docker: DockerDep,
+):
+    """Contenedores parados y lo que ocupan. **No borra nada.**
+
+    Los tamaños salen de `/system/df` y no de `/containers/json`, donde la clave
+    `SizeRw` no existe. Si el `df` no responde se responde `503`: un 0 sería una
+    afirmación sobre el disco del host que el panel no puede sostener.
+    """
+    return await ContainerService.preview_prune(docker=docker)
+
+
+@router.post("/prune", response_model=ContainerPruneResult)
+async def prune_containers(
+    docker: DockerDep,
+):
+    """Pide al daemon que elimine los contenedores parados.
+
+    Se lleva la **capa de escritura** de cada uno. Por eso el diálogo de la
+    interfaz enseña los nombres y no un número.
+    """
+    return await ContainerService.prune_containers(docker=docker)
+
+
 @router.get("/{container_id}", response_model=ContainerDetail)
 async def get_container(
     docker: DockerDep,
@@ -95,6 +131,79 @@ async def get_container_logs(
     return await ContainerService.get_logs_snapshot(
         docker=docker, container_id=container_id, tail=tail, timestamps=timestamps
     )
+
+
+@router.get("/{container_id}/metrics", response_model=MetricsHistory)
+async def get_container_metrics(
+    docker: DockerDep,
+    container_id: str,
+):
+    """La serie de métricas del contenedor con los metadatos de ventana (SPEC-17).
+
+    No crea el anillo: mirar no es observar. Y `running` sale del listado, que
+    es de donde viene el estado de ahora; el anillo sólo sabe lo que se midió.
+    """
+    try:
+        encontrado = await ContainerService.buscar_para_series(docker=docker, container_id=container_id)
+    except DockerError as e:
+        raise _traducir(e, f"/containers/{container_id}/metrics") from e
+
+    if encontrado is None:
+        raise HTTPException(status_code=404, detail=f"No existe el contenedor {container_id}")
+
+    cid, nombre, en_marcha = encontrado
+    historia = get_store().get(cid)
+    # El estado y el nombre se refrescan con el del listado; las muestras son
+    # las que hay, y no se tocan.
+    return historia.model_copy(update={"container_name": nombre or historia.container_name, "running": en_marcha})
+
+
+@router.post("/{container_id}/watch", response_model=WatchResponse)
+async def watch_container(
+    docker: DockerDep,
+    container_id: str,
+):
+    """Fija el contenedor para que se mida aunque nadie lo mire (SPEC-17 §4.3)."""
+    try:
+        encontrado = await ContainerService.buscar_para_series(docker=docker, container_id=container_id)
+    except DockerError as e:
+        raise _traducir(e, f"/containers/{container_id}/watch") from e
+
+    if encontrado is None:
+        raise HTTPException(status_code=404, detail=f"No existe el contenedor {container_id}")
+
+    cid, _nombre, _en_marcha = encontrado
+    if not get_store().observe(cid):
+        # El 409 en vez de un 400 porque no es unalidación del pedido: el
+        # panel está al tope y la respuesta dice cuál es, que un 409 mudo no
+        # explicaría nada.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Ya se observan {settings.METRICS_MAX_TRACKED} contenedores, que es el máximo. "
+                "Deja de observar alguno para seguir otro."
+            ),
+        )
+    return WatchResponse(container_id=cid, observed=True)
+
+
+@router.delete("/{container_id}/watch", response_model=WatchResponse)
+async def unwatch_container(
+    docker: DockerDep,
+    container_id: str,
+):
+    """Deja de observar el contenedor. Su serie sigue ahí hasta que expire."""
+    try:
+        encontrado = await ContainerService.buscar_para_series(docker=docker, container_id=container_id)
+    except DockerError as e:
+        raise _traducir(e, f"/containers/{container_id}/watch") from e
+
+    if encontrado is None:
+        raise HTTPException(status_code=404, detail=f"No existe el contenedor {container_id}")
+
+    cid, _nombre, _en_marcha = encontrado
+    get_store().unobserve(cid)
+    return WatchResponse(container_id=cid, observed=False)
 
 
 @router.get("/{container_id}/stats", response_model=ContainerStats)

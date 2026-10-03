@@ -160,6 +160,23 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
     )
   }, [])
 
+  /**
+   * Refleja en el inventario local un cambio del pin de observación (SPEC-17).
+   *
+   * Mismo criterio que `renameLocal`, y por el mismo motivo: el backend acaba de
+   * confirmar el valor nuevo en la respuesta del `watch`, así que la fila ya
+   * tiene su respuesta y no hay nada que volver a preguntar. Un refetch entero
+   * por un booleano recorrería el host para descubrir algo que ya sabemos.
+   *
+   * Sin esto, la píldora «Observando» de la tabla seguía diciendo lo que decía
+   * hasta que se pulsara el refresco manual o se cambiara de pestaña.
+   */
+  const setObservedLocal = useCallback((containerId: string, observed: boolean) => {
+    setContainers((previas) =>
+      previas.map((c) => (c.id === containerId ? { ...c, observed } : c))
+    )
+  }, [])
+
   const filteredContainers = useMemo(() => {
     return containers.filter((c) => {
       // El estado se filtra en el navegador, y **antes** que la búsqueda: así el
@@ -205,6 +222,7 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
     setSearchQuery,
     actionInProgress,
     renameLocal,
+    setObservedLocal,
     refetch: fetchContainers,
     executeAction,
   }

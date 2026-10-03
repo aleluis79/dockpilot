@@ -8,6 +8,8 @@ from app.core.docker import get_docker
 from app.schemas.image import (
     ImageDeleteResponse,
     ImageDetail,
+    ImagePrunePreview,
+    ImagePruneResult,
     ImageSearchResult,
     LocalImageSummary,
 )
@@ -24,6 +26,46 @@ async def list_local_images(
 ):
     """Lista las imágenes almacenadas localmente en el host."""
     return await ImageService.list_local_images(docker=docker)
+
+
+# --- Limpieza (SPEC-21) ------------------------------------------------------
+#
+# `/prune` va ANTES que `/{image_id}` y el orden no es una cuestión de estilo:
+# FastAPI empareja por el orden de declaración, así que un `GET /images/prune`
+# declarado después se interpretaría como el detalle de una imagen llamada
+# `prune` y devolvería un 404 sobre una imagen que no existe. Hay un test que lo
+# fija, porque es un fallo que no se ve leyendo el router.
+@router.get("/prune", response_model=ImagePrunePreview)
+async def preview_image_prune(
+    docker: DockerDep,
+):
+    """Qué se borraría con cada nivel de limpieza. **No borra nada.**
+
+    Los bytes son una cota superior: se suman los `Size` y dos imágenes pueden
+    compartir capas, y `SharedSize` viene como `-1` en el daemon 29.8.2, así que
+    ni se puede descontar lo compartido.
+    """
+    return await ImageService.preview_prune(docker=docker)
+
+
+@router.post("/prune", response_model=ImagePruneResult)
+async def prune_images(
+    docker: DockerDep,
+    all: bool = Query(
+        False,
+        description=(
+            "Si es true, quita también las imágenes que tienen etiqueta y no usa ningún "
+            "contenedor. Un POST sin parámetros NUNCA las quita."
+        ),
+    ),
+):
+    """Pide al daemon que limpie imágenes.
+
+    `all` es un parámetro de query y no del cuerpo a propósito: es lo que separa
+    el botón seguro del peligroso, y un cuerpo opcional haría que un cliente que
+    no lo manda limpiara de más. Es el mismo criterio que `?force=` en el borrado.
+    """
+    return await ImageService.prune_images(docker=docker, all_unused=all)
 
 
 @router.get("/search", response_model=list[ImageSearchResult])

@@ -211,6 +211,84 @@ async def test_prune_reports_reclaimed_bytes(async_client: AsyncClient):
     assert "message" in data
 
 
+# --- El filtro `all`, que sin él el botón no hace nada ------------------------
+
+
+@pytest.mark.asyncio
+async def test_prune_pide_all_al_daemon(async_client: AsyncClient, mock_docker):
+    """**Sin `all`, el prune no hace nada en un host normal.**
+
+    `POST /volumes/prune` tiene un parámetro `all` que el daemon define como
+    "considera todos los volúmenes, no sólo los anónimos", y **por omisión es
+    `false`**. Sin él, un volumen con nombre y sin uso —todo lo que crea un
+    `docker run -v` o un compose— no se borra nunca.
+
+    Es el bug que se reportó: el botón anunciaba cuatro volúmenes y 120 MB, y
+    el daemon no eliminaba ninguno. `docker volume prune --help` lo dice en la
+    ayuda (`-a, --all  Remove all unused volumes, not just anonymous ones`), y
+    el botón del panel es el equivalente de ese `-a`.
+    """
+    respuesta = await async_client.post("/api/v1/volumes/prune")
+    assert respuesta.status_code == 200
+
+    # **Como cadena**: `clean_filters` de aiodocker serializa el valor tal cual,
+    # y `{"all": True}` sale como `{"all": [true]}` → `400 invalid filter`.
+    assert mock_docker.volumes.prune_filtros == [{"all": "true"}]
+
+
+@pytest.mark.asyncio
+async def test_el_doble_replica_el_anonimo_por_defecto(mock_docker):
+    """El doble tiene que comportarse como el daemon, no como el botón.
+
+    Antes ignoraba los filtros y borraba todo lo no usado, así que
+    `test_prune_only_removes_unused` pasaba con el servicio sin mandar filtro: el
+    test verde y el panel roto a la vez. Es la misma trampa que documenta
+    `agent.md`: un doble que modela mal la librería hace que el test pase por la
+    razón equivocada.
+    """
+    sin_all = await mock_docker.volumes.prune()
+
+    assert "temporal" not in sin_all["VolumesDeleted"], "sin `all` sólo los anónimos"
+    assert ANON_A in sin_all["VolumesDeleted"]
+
+    con_all = await mock_docker.volumes.prune(filters={"all": "true"})
+
+    assert "temporal" in con_all["VolumesDeleted"]
+
+
+@pytest.mark.asyncio
+async def test_el_doble_respeta_el_filtro_all(mock_docker):
+    """Comprobación directa, sin depender del orden de los otros tests."""
+    resultado = await mock_docker.volumes.prune(filters={"all": "true"})
+
+    assert "temporal" in resultado["VolumesDeleted"]
+    assert "datos-app" not in resultado["VolumesDeleted"]
+
+
+@pytest.mark.asyncio
+async def test_sin_eliminados_no_dice_que_no_hay_nada_que_limpiar(
+    async_client: AsyncClient, mock_docker
+):
+    """Si el daemon no borra nada, el mensaje no puede afirmar que no había nada.
+
+    `message` es lo que ve el usuario, y «No hay volúmenes sin uso: nada que
+    limpiar» es una afirmación sobre el inventario que **el prune no sabe
+    hacer**: el prune sólo sabe qué borró. Cuando no borró nada, lo único que
+    sabe es eso.
+    """
+    async def prune_nada(**_kwargs):
+        return {"VolumesDeleted": [], "SpaceReclaimed": 0}
+
+    mock_docker.volumes.prune = prune_nada
+
+    response = await async_client.post("/api/v1/volumes/prune")
+    data = response.json()
+
+    assert data["deleted"] == []
+    assert "nada que limpiar" not in data["message"].lower()
+    assert "no ha eliminado" in data["message"].lower()
+
+
 # --- "No lo sé" no es "está libre" ---------------------------------------------
 
 

@@ -16,6 +16,8 @@ from app.core.docker import docker_error_message, docker_error_status
 from app.schemas.container import (
     ContainerActionResponse,
     ContainerDetail,
+    ContainerPrunePreview,
+    ContainerPruneResult,
     ContainerSummary,
     CreateContainerRequest,
     CreateContainerResponse,
@@ -28,6 +30,7 @@ from app.schemas.container import (
 from app.schemas.log import LogEntry, LogSnapshotResponse
 from app.services.compose_service import compose_project_of
 from app.services.image_service import normalize_image_ref
+from app.services.metrics_store import get_store
 
 
 def _get_container_dict(c: Any) -> dict:
@@ -448,7 +451,151 @@ def _nombre_actual(info: dict[str, Any]) -> str:
     return str(info.get("Name") or "").lstrip("/")
 
 
+async def _tamanos_de_contenedores(docker: aiodocker.Docker) -> tuple[dict[str, int], bool]:
+    """El `SizeRw` de cada contenedor, indexado por **nombre**, desde `/system/df`.
+
+    Se indexa por nombre y no por id porque el preaviso trabaja con nombres, que
+    es lo que el usuario reconoce, y porque `/system/df` trae `Names` pero un id
+    corto que no siempre coincide con el `Id` completo.
+
+    El segundo valor de la tupla es si la forma se reconoce. `Containers` ausente
+    no es «cero tamaño»: es una forma que no se sabe leer, y leerla como vacía
+    daría un 0 que el panel presentaría como un hecho.
+    """
+    try:
+        df = await docker._query_json("system/df")
+    except Exception:
+        return {}, False
+
+    if not isinstance(df, dict) or "Containers" not in df:
+        return {}, False
+
+    tamanos: dict[str, int] = {}
+    for entrada in df.get("Containers") or []:
+        if not isinstance(entrada, dict):
+            continue
+        nombres = entrada.get("Names") or []
+        nombre = str(nombres[0]).lstrip("/") if nombres else str(entrada.get("Id") or "")[:12]
+        if not nombre:
+            continue
+        tamanos[nombre] = int(entrada.get("SizeRw") or 0)
+    return tamanos, True
+
+
 class ContainerService:
+    @staticmethod
+    async def preview_prune(docker: aiodocker.Docker) -> ContainerPrunePreview:
+        """Qué contenedores parados hay y lo que ocupan (SPEC-21).
+
+        **Dos fuentes y no una**, que es lo que hace este método menos obvious de
+        lo escrito:
+
+        - **Quién está parado** sale de `GET /containers/json`.
+        - **Cuánto ocupa** sólo está en `GET /system/df` → `Containers[]` →
+          `SizeRw`. En `/containers/json` la clave **no existe** (medido en el
+          daemon 29.8.2: `None`), así que un preaviso que la leyera de ahí
+          daría 0 para todo y parecería que los contenedores no ocupan nada.
+
+        Y si el `df` no responde, o si su forma no es la que se conoce, se
+        responde `503`. Un `0` aquí sería una afirmación sobre el disco del host
+        que el panel no puede sostener: es el mismo `usage_known` de SPEC-08.
+        """
+        try:
+            contenedores = await docker.containers.list(all=True)
+        except DockerError as e:
+            raise HTTPException(
+                status_code=503,
+                detail=f"No se pudo leer los contenedores para el preaviso: {docker_error_message(e)}",
+            ) from e
+
+        parados: list[str] = []
+        for c in contenedores:
+            info = _get_container_dict(c)
+            if str(info.get("State") or "") == "running":
+                continue
+            nombres = info.get("Names") or []
+            parados.append(str(nombres[0]).lstrip("/") if nombres else str(info.get("Id") or "")[:12])
+
+        tamano_por_id, conocido = await _tamanos_de_contenedores(docker)
+        if not conocido:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "El daemon no informó del tamaño de los contenedores, así que no se "
+                    "puede decir cuánto se recuperaría. La limpieza está disponible, pero "
+                    "su cifra no."
+                ),
+            )
+
+        bytes_total = sum(tamano_por_id.get(n, 0) for n in parados)
+        return ContainerPrunePreview(
+            stopped_count=len(parados),
+            stopped_bytes=bytes_total,
+            stopped_names=parados,
+        )
+
+    @staticmethod
+    async def prune_containers(docker: aiodocker.Docker) -> ContainerPruneResult:
+        """Pide al daemon que elimine los contenedores parados (SPEC-21).
+
+        Se lleva la **capa de escritura** de cada uno, que es justo lo que un
+        contenedor parado puede tener dentro. Por eso el `deleted` lleva nombres:
+        un id no lo reconoce nadie.
+
+        No hay `force` y no se echa de menos: el prune del daemon no borra nada
+        que esté en marcha, y esa es la garantía que hace esto aceptable. La que
+        no da es que lo que está parado sea prescindible, y por eso el diálogo
+        enseña los nombres antes de preguntar.
+        """
+        try:
+            raw = await docker.containers.prune()
+        except DockerError as e:
+            raise HTTPException(
+                status_code=503, detail=f"Error al limpiar los contenedores: {docker_error_message(e)}"
+            ) from e
+        except Exception as e:
+            raise HTTPException(
+                status_code=500, detail=f"Error inesperado al limpiar los contenedores: {e!s}"
+            ) from e
+
+        borrados = [str(v)[:12] for v in (raw or {}).get("ContainersDeleted") or []]
+        reclaimed = int((raw or {}).get("SpaceReclaimed") or 0)
+        if not borrados:
+            message = "No hay contenedores parados: nada que limpiar"
+        else:
+            plural = "s" if len(borrados) != 1 else ""
+            message = (
+                f"{len(borrados)} contenedor{plural} parado{plural} eliminado{plural}: "
+                f"{', '.join(borrados)}"
+            )
+        return ContainerPruneResult(deleted=borrados, bytes_reclaimed=reclaimed, message=message)
+
+    @staticmethod
+    async def buscar_para_series(
+        docker: aiodocker.Docker, container_id: str
+    ) -> tuple[str, str, bool] | None:
+        """Localiza un contenedor y devuelve `(id_corto, nombre, en_marcha)`.
+
+        **Un** `list(all=True)` y de ahí salen las tres cosas. No es una
+        comodidad: existe para que pedir el historial cueste una llamada, y no
+        una por dato. Se acepta el nombre además del id porque el panel lo tiene
+        de las dos formas y `get()` por nombre es un 404 si no existe.
+
+        Devuelve `None` si no hay ningún contenedor con ese id o nombre, y de
+        eso se encarga la ruta a responder un 404 legible.
+        """
+        contenedores = await docker.containers.list(all=True)
+        for c in contenedores:
+            info = _get_container_dict(c)
+            cid = str(info.get("Id") or getattr(c, "id", "") or "")
+            nombres = {str(n).lstrip("/") for n in (info.get("Names") or [])}
+            if container_id not in {cid, cid[:12]} and container_id not in nombres:
+                continue
+            corto = cid[:12] if len(cid) > 12 else cid
+            nombre = next(iter(nombres), "") or corto
+            return corto, nombre, str(info.get("State") or "") == "running"
+        return None
+
     @staticmethod
     async def list_containers(
         docker: aiodocker.Docker,
@@ -469,6 +616,7 @@ class ContainerService:
                 filters["health"] = list(health)
 
             raw_containers = await docker.containers.list(all=all, filters=filters)
+            store = get_store()
             summaries = []
             for c in raw_containers:
                 info = _get_container_dict(c)
@@ -494,6 +642,9 @@ class ContainerService:
                         # que esto no cuesta ni una llamada: no hay un `show()`
                         # por contenedor (SPEC-18 §3.1).
                         health=_health_de_listado(info),
+                        # Y `observed` tampoco: es una consulta al diccionario
+                        # en memoria del almacén de métricas (SPEC-17 §4.9).
+                        observed=store.is_observed(cid[:12] if len(cid) > 12 else cid),
                     )
                 )
             return summaries
