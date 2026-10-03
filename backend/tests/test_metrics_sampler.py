@@ -275,3 +275,55 @@ async def test_el_cliente_de_docker_se_espera_antes_de_muestrear():
     fuente = inspect.getsource(lifespan)
     assert "bucle_muestreo(await get_docker())" in fuente
     assert "bucle_muestreo(get_docker())" not in fuente
+
+
+# --- La expulsión por antigüedad tiene que correr siempre ---------------------
+#
+# `evict_expired()` estaba al final del camino feliz del tic, detrás de tres
+# salidas tempranas. Con cero observados —el caso normal de un panel en uso
+# ligero— el tic se iba por `if not observados: return` y no expulsaba NADA. Es
+# justo el caso en el que hay algo que limpiar: el histórico de quien miró un
+# contenedor y cerró la ventana.
+#
+# No era una fuga (max_tracked acota a 12 anillos), pero dejaba el TTL sin efecto
+# en el estado del panel y hacía que los anillos sólo se fueran cuando, por
+# casualidad, había algo observado y en marcha.
+
+
+async def test_expulsa_aunque_no_haya_nada_observado(mock_docker, store, reloj):
+    store.append("c-visitado", MetricSample(
+        t=1000.0, cpu_percent=1.0, memory_percent=1.0,
+        network_rx_bytes=0, network_tx_bytes=0, block_read_bytes=0, block_write_bytes=0,
+    ))
+    assert store.tracked_ids() != []
+
+    reloj.avanzar(store.ttl_s + 1)
+    await muestrear_una_vez(mock_docker, store=store, now=reloj)
+
+    assert store.tracked_ids() == []
+
+
+async def test_expulsa_aunque_el_daemon_no_responda(mock_docker, store, reloj):
+    """El TTL es limpieza, no medida: si el daemon se cae no hay razón para
+    dejar de limpiar, y al revés tampoco."""
+    store.append("c-visitado", MetricSample(
+        t=1000.0, cpu_percent=1.0, memory_percent=1.0,
+        network_rx_bytes=0, network_tx_bytes=0, block_read_bytes=0, block_write_bytes=0,
+    ))
+    store.observe("c-observado")
+    reloj.avanzar(store.ttl_s + 1)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "app.services.metrics_sampler._estado_del_host",
+            _que_falla,
+        )
+        await muestrear_una_vez(mock_docker, store=store, now=reloj)
+
+    # El no observado se va. El observado tampoco: el pin se va con su anillo
+    # (§4.3), y sin lecturas no hay forma de saber que sigue existiendo.
+    assert store.tracked_ids() == []
+
+
+async def _que_falla(_docker):
+    raise DockerError(500, "el daemon no responde")

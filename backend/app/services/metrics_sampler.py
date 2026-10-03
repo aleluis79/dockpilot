@@ -114,48 +114,55 @@ async def muestrear_una_vez(
 
     Es una función aparte del bucle para que los tests puedan ejercitar un tic
     entero sin dormir ni una tarea que cancelar.
+
+    La expulsión por antigüedad va en un `finally` y no al final del camino
+    feliz: estaba detrás de las tres salidas tempranas, así que con cero
+    observados —el caso normal de un panel en uso ligero— no expulsaba nada. Es
+    decir, el TTL no hacía nada justo cuando había algo que limpiar. Y es
+    limpieza, no medida: que el daemon se cae no es razón para dejar de limpiar.
     """
     almacen = store or get_store()
     reloj = now or time.time
 
-    observados = almacen.observed_ids()
-    if not observados:
-        return
-
     try:
-        estado = await _estado_del_host(docker)
-    except Exception as e:
-        # El daemon caído es el fallo más probable de todo el panel. Se avisa y
-        # el tic no mide nada: adivinar qué está en marcha sería meter ceros.
-        logger.warning("No se pudo leer el estado de los contenedores: %s", e)
-        return
+        observados = almacen.observed_ids()
+        if not observados:
+            return
 
-    en_marcha: list[tuple[str, dict]] = []
-    for cid in observados:
-        info = estado.get(cid)
-        if info is None:
-            # Parado o borrado: se dice que no lo está y no se le mide. Su serie
-            # no se toca, así que vuelve entera cuando arrancar.
-            almacen.estado(cid, running=False)
-            continue
-        almacen.estado(cid, running=True, name=_short_name(cid, info))
-        en_marcha.append((cid, info))
+        try:
+            estado = await _estado_del_host(docker)
+        except Exception as e:
+            # El daemon caído es el fallo más probable de todo el panel. Se avisa y
+            # el tic no mide nada: adivinar qué está en marcha sería meter ceros.
+            logger.warning("No se pudo leer el estado de los contenedores: %s", e)
+            return
 
-    if not en_marcha:
-        return
+        en_marcha: list[tuple[str, dict]] = []
+        for cid in observados:
+            info = estado.get(cid)
+            if info is None:
+                # Parado o borrado: se dice que no lo está y no se le mide. Su serie
+                # no se toca, así que vuelve entera cuando arrancar.
+                almacen.estado(cid, running=False)
+                continue
+            almacen.estado(cid, running=True, name=_short_name(cid, info))
+            en_marcha.append((cid, info))
 
-    resultados = await asyncio.gather(
-        *(_leer_una_muestra(docker, cid, info, reloj) for cid, info in en_marcha),
-        return_exceptions=True,
-    )
-    for (cid, _info), resultado in zip(en_marcha, resultados, strict=True):
-        if isinstance(resultado, BaseException):
-            logger.warning("No se pudo muestrear %s: %s", cid, resultado)
-            continue
-        if resultado is not None:
-            almacen.append(cid, resultado)
+        if not en_marcha:
+            return
 
-    almacen.evict_expired()
+        resultados = await asyncio.gather(
+            *(_leer_una_muestra(docker, cid, info, reloj) for cid, info in en_marcha),
+            return_exceptions=True,
+        )
+        for (cid, _info), resultado in zip(en_marcha, resultados, strict=True):
+            if isinstance(resultado, BaseException):
+                logger.warning("No se pudo muestrear %s: %s", cid, resultado)
+                continue
+            if resultado is not None:
+                almacen.append(cid, resultado)
+    finally:
+        almacen.evict_expired()
 
 
 async def bucle_muestreo(

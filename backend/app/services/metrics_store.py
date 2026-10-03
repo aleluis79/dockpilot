@@ -176,21 +176,14 @@ class MetricsStore:
                 anillo.activity = ahora
             return True
 
+        # `_crear()` es la puerta del tope y ya se encarga de expulsar al más
+        # viejo no observado si hace falta (§4.2). Por eso aquí no se repite: la
+        # versión anterior que sí lo repetía quedó inalcanzable detrás de este
+        # `return True`, y para siempre.
         anillo = self._crear(clave, ahora)
         if anillo is None:
             return False
         anillo.observed = True
-        return True
-
-        if anillo is None and len(self._anillos) >= self.max_tracked:
-            self._expulsar_no_observado()
-            if len(self._anillos) >= self.max_tracked:
-                return False
-
-        if anillo is None:
-            anillo = self._crear(container_id, ahora)
-        anillo.observed = True
-        anillo.activity = ahora
         return True
 
     def unobserve(self, container_id: str) -> None:
@@ -270,9 +263,20 @@ class MetricsStore:
     # -- expulsión por antigüedad -------------------------------------------
 
     def evict_expired(self) -> None:
-        """Tira los anillos sin actividad ni observación. Desobservar es
-        actividad, y observar también, así que un pin se mantiene vivo sin
-        muestras: un contenedor parado sigue observado hasta que TTL lo suelte."""
+        """Tira los anillos sin actividad durante más de `ttl_s`. **También los
+        observados**, y no es un descuido: el pin es un flag en memoria atado a
+        su anillo, así que un anillo observado que nadie suelta se lleva el pin
+        detrás y el panel deja de medirlo sin que nadie lo pidiera (§4.3).
+
+        Lo que evita que eso duela es que el anillo observado se refresca en cada
+        tic (`estado()`) y en cada lectura (`get()`): un contenedor **parado** no
+        deja muestras, y si la antigüedad no lo viera, su pin se iría solo por no
+        tener nada que escribir.
+
+        Soltar un pin es de quien lo fijó, y lo hace `unobserve()`, no el reloj.
+        Lo que el reloj suelta es el resto: el histórico de alguien que miró un
+        contenedor y se fue.
+        """
         ahora = self._now()
         caducados = [cid for cid, anillo in self._anillos.items() if ahora - anillo.activity > self.ttl_s]
         for cid in caducados:

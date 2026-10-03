@@ -173,8 +173,13 @@ def test_expulsar_el_anillo_lo_desmarca(store, reloj):
 
 
 def test_un_anillo_observado_no_expira_por_no_recibir_muestras(reloj):
-    """Observar es una actividad: un contenedor parado no deja muestras, y si
-    la antigüedad lo borrara, el pin se iría solo sin que nadie lo pidiera."""
+    """Observar es una actividad, y por eso un contenedor PARADO —que no deja
+    muestras— conserva su anillo mientras el TTL no venza.
+
+    Lo que este test NO dice es que el pin sobreviva al TTL: se lo lleva el anillo
+    (§4.3, y `test_expulsar_el_anillo_lo_desmarca`). Lo que fija es que un anillo
+    observado no se va por no tener nada que escribir, sino por antigüedad.
+    """
     store = MetricsStore(now=reloj, max_samples=100, max_tracked=4, ttl_s=60)
     store.observe("c1")
 
