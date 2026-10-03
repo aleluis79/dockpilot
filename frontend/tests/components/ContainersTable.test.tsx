@@ -201,3 +201,62 @@ describe('ContainersTable · observado', () => {
     expect(screen.queryByTestId('container-observed')).not.toBeInTheDocument()
   })
 })
+
+// --- La tabla no se deja reventar por un nombre largo (SPEC-00) -------------
+//
+// Un contenedor puede llamarse con un sha de 64 caracteres. Con `table-auto` la
+// columna se dimensiona al contenido, esa celda empuja la tabla entera más allá
+// del contenedor y los BOTONES DE ACCIÓN se van fuera de pantalla. Es peor que
+// un scroll: la acción es lo que hay que poder pulsar.
+
+describe('ContainersTable · nombres largos', () => {
+  const base = {
+    image: 'nginx:alpine',
+    status: 'running',
+    state: 'Up 2 hours',
+    created: 1727290000,
+    ports: [],
+  }
+
+  it('la tabla es de ancho fijo, que es lo que evita el desbordamiento', () => {
+    const { container } = render(
+      <ContainersTable containers={[{ ...base, id: 'c1', name: 'web' }]} onSelect={vi.fn()} />
+    )
+    expect(container.querySelector('table')?.className).toContain('table-fixed')
+    expect(container.querySelector('table')?.className).not.toContain('table-auto')
+  })
+
+  it('el nombre se trunca y el entero se ve al pasar el ratón', () => {
+    const largo = 'a'.repeat(64)
+    render(<ContainersTable containers={[{ ...base, id: 'c1', name: largo }]} onSelect={vi.fn()} />)
+
+    const celda = screen.getByText(largo)
+    expect(celda.className).toContain('truncate')
+    // El texto completo tiene que seguir en el DOM y en el `title`: truncar sin
+    // `title` deja al usuario sin poder saber qué hay detrás.
+    expect(celda).toHaveAttribute('title', largo)
+  })
+
+  it('la imagen también se trunca, que un digest es igual de larga', () => {
+    const digest = `nginx@sha256:${'b'.repeat(64)}`
+    render(
+      <ContainersTable containers={[{ ...base, id: 'c1', name: 'web', image: digest }]} onSelect={vi.fn()} />
+    )
+    const celda = screen.getByText(digest)
+    expect(celda.className).toContain('truncate')
+    expect(celda).toHaveAttribute('title', digest)
+  })
+
+  it('las acciones siguen presentes en una fila con nombre de 64 caracteres', () => {
+    render(
+      <ContainersTable
+        containers={[{ ...base, id: 'c1', name: 'a'.repeat(64) }]}
+        onSelect={vi.fn()}
+      />
+    )
+    // El botón de inicio es el que importa: si la fila se sale de pantalla, el
+    // panel se queda sin forma de Asked.
+    expect(screen.getByTitle(/Detener contenedor/)).toBeInTheDocument()
+    expect(screen.getByTitle(/Eliminar contenedor/)).toBeInTheDocument()
+  })
+})

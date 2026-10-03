@@ -54,14 +54,22 @@ export const ContainersTable: React.FC<ContainersTableProps> = ({
 
   return (
     <div className="overflow-x-auto rounded-xl border border-default bg-surface/40 backdrop-blur">
-      <table className="w-full text-left text-sm text-fg">
+      {/* `table-fixed` y no `table-auto`, y por el motivo que se lee en la
+          celda del nombre: en auto, la columna se dimensiona al contenido, así
+          que un solo nombre de 64 caracteres empuja la tabla entera más allá del
+          contenedor, salta el `overflow-x-auto` del envoltorio y los botones de
+          acción se quedan fuera de pantalla. Con `fixed` las columnas se
+          reparten el ancho disponible y la tabla nunca lo excede. Los anchos
+          suman menos del 100% a propósito, para que la última columna —las
+          acciones— se quede con el sobrante en vez de repartírselo a la primera. */}
+      <table className="w-full table-fixed text-left text-sm text-fg">
         <thead className="bg-surface/80 text-xs uppercase tracking-wider text-fg-muted border-b border-default">
           <tr>
-            <th className="py-3.5 px-4 font-semibold">Contenedor</th>
-            <th className="py-3.5 px-4 font-semibold">Proyecto</th>
-            <th className="py-3.5 px-4 font-semibold">Imagen</th>
-            <th className="py-3.5 px-4 font-semibold">Estado</th>
-            <th className="py-3.5 px-4 font-semibold">Puertos</th>
+            <th className="w-[20%] py-3.5 px-4 font-semibold">Contenedor</th>
+            <th className="w-[12%] py-3.5 px-4 font-semibold">Proyecto</th>
+            <th className="w-[22%] py-3.5 px-4 font-semibold">Imagen</th>
+            <th className="w-[12%] py-3.5 px-4 font-semibold">Estado</th>
+            <th className="w-[14%] py-3.5 px-4 font-semibold">Puertos</th>
             <th className="py-3.5 px-4 font-semibold text-right">Acciones</th>
           </tr>
         </thead>
@@ -73,8 +81,17 @@ export const ContainersTable: React.FC<ContainersTableProps> = ({
               className="hover:bg-fg/10 cursor-pointer transition-colors group"
             >
               <td className="py-3.5 px-4">
-                <div className="flex flex-col">
-                  <span className="font-medium text-fg group-hover:text-blue-400 transition-colors">
+                <div className="flex flex-col min-w-0">
+                  {/* Un nombre de contenedor puede ser un sha de 64 caracteres.
+                      Sin acotar la celda, esa columna empuja la tabla entera más
+                      allá del contenedor, el `overflow-x-auto` de arriba se
+                      activa y los BOTONES DE ACCIÓN se van fuera de pantalla sin
+                      scroll horizontal que lo indique. Por eso el truncado, y no
+                      un scroll: la acción es lo que hay que poder pulsar (SPEC-00). */}
+                  <span
+                    className="font-medium text-fg group-hover:text-blue-400 transition-colors truncate"
+                    title={c.name}
+                  >
                     {c.name}
                   </span>
                   <span className="font-mono text-xs text-fg-muted">{c.id.slice(0, 12)}</span>
@@ -98,7 +115,12 @@ export const ContainersTable: React.FC<ContainersTableProps> = ({
                 <ComposeBadge project={c.compose_project} />
               </td>
               <td className="py-3.5 px-4">
-                <span className="font-mono text-xs text-fg-muted bg-elevated/60 px-2 py-0.5 rounded border border-strong/40">
+                {/* Mismo motivo que el nombre: una referencia de imagen con
+                    digest son 71 caracteres. */}
+                <span
+                  className="block font-mono text-xs text-fg-muted bg-elevated/60 px-2 py-0.5 rounded border border-strong/40 truncate"
+                  title={c.image}
+                >
                   {c.image}
                 </span>
               </td>
