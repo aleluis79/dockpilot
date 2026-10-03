@@ -20,6 +20,7 @@ autenticación y está pensado para un único operador en `127.0.0.1`.**
 - **Proyectos compose** — inventario por etiquetas, previsualización del archivo, despliegue, ciclo de vida y logs en vivo.
 - **Salud, renombrado y ficheros** — healthcheck con su log de sondas, renombrar sin recrear, y explorar y copiar ficheros dentro del contenedor.
 - **Histórico de métricas** — series de CPU, memoria, red y disco por contenedor, con observar para que sigan midiéndose con las ventanas cerradas.
+- **Autoprotección** — el panel no se puede parar, pausar ni borrar a sí mismo desde su interfaz, ni borrar su red o sus imágenes. Iniciar y reiniciar sí siguen disponibles, que es lo que hace falta si ya está caído.
 - **Tema claro/oscuro/sistema**, con detección de `prefers-color-scheme`.
 
 ## Stack
@@ -54,14 +55,24 @@ de `window.location` mediante `src/services/wsUrl.ts`.
 Para cambiarlos, override con `FRONTEND_PORT` y `CORS_ORIGINS` (en JSON), o edita
 los tres ficheros anteriores.
 
+En el despliegue con contenedores los puertos se publican en `docker-compose.yml`, y
+el del backend **solo en loopback** (`127.0.0.1:8181`), porque es el que tiene el
+socket de Docker montado.
+
 ## Requisitos
 
 - Python 3.12 o superior
 - [pnpm](https://pnpm.io) 10 o superior
 - Acceso al socket de Docker: el usuario que ejecute el backend debe poder
   hablar con `/var/run/docker.sock` (normalmente, pertenecer al grupo `docker`)
+- Para el despliegue con contenedores: Docker con `docker compose` y su plugin
 
 ## Puesta en marcha
+
+Hay dos formas de levantar el panel. En desarrollo, con `make`; para tener el
+sitio en pie sin depender del host, en contenedores.
+
+### Desarrollo
 
 ```bash
 # 1. Dependencias
@@ -87,6 +98,95 @@ make down
 Los Makefile lanzan los procesos en segundo plano y escriben sus logs en
 `/tmp/dockpilot-backend.log` y `/tmp/dockpilot-frontend.log`.
 
+## Despliegue con Docker
+
+La otra forma de levantarlo, con las dos imágenes ya construidas:
+
+```bash
+docker compose up -d --build     # http://localhost:8182
+docker compose down
+```
+
+No es un camino paralelo al de `make up`, es el mismo panel. Lo que cambia es que
+el Docker que se quiere gestionar sigue siendo **el del host**: los contenedores
+del panel se montan el socket de `/var/run/docker.sock` y hablan con ese daemon.
+Es el patrón `docker-outside-of-docker`, y es el habitual en un gestor de
+contenedores.
+
+### Qué hay dentro
+
+| Servicio | Imagen | Puerto | Nota |
+| :--- | :--- | :--- | :--- |
+| `backend` | `backend/Dockerfile` | `127.0.0.1:8181` | FastAPI, y el que habla con el daemon |
+| `frontend` | `frontend/Dockerfile` | `8182` | nginx sirviendo el `dist` y reenviando `/api` y `/ws` |
+
+El frontend es **nginx y no Node**: el navegador habla con el mismo origen que la
+API, porque `BASE_URL` es relativo y `wsUrl()` sale de `window.location`. En
+desarrollo eso lo resolvía `server.proxy` de Vite, que no se aplica al `dist`.
+
+El backend solo se publica en **loopback**, y el frontend en todas las
+interfaces. No es simetría por gusto: el backend tiene el socket de Docker
+montado, así que exponerlo en la red local significaría que cualquiera que llegue
+a ese puerto puede crear un contenedor con un `host_path` sin confinar.
+
+### Tres cosas que hacen falta y no se deducen del código
+
+**1. El binario de `docker compose`, no solo el socket.** El backend lanza el CLI
+de verdad (`app/services/compose_cli.py`) porque el preview de un compose lo
+resuelve con `docker compose config` y no con un parser propio, para que el
+preview no pueda discrepar de lo que hace `up`. La imagen lo instala. Sin él, todo
+el panel funciona salvo la sección de compose, y el fallo aparece como un error
+en su WebSocket, no como un fallo de arranque.
+
+**2. Los proyectos compose, montados en la MISMA ruta absoluta dentro y fuera.** Es
+lo más fácil de hacer mal y lo que peor falla. El daemon resuelve los
+`volumes: ./datos` de un compose **relativos al directorio del proyecto, en el
+host**, así que si aquí el proyecto se montase en otra ruta, el despliegue
+arrancaría con el directorio vacío y sin avisar de nada.
+
+Por defecto se monta tu `$HOME`, que es lo que hace el backend cuando corre sin
+contenedor. Para acotarlo, con una ruta **absoluta**:
+
+```bash
+DOCKPILOT_PROJECTS_ROOT=$HOME/proyectos docker compose up -d
+```
+
+Esa misma variable es la que se le pasa al backend como `COMPOSE_BROWSE_ROOT`, la
+raíz del explorador de ficheros.
+
+> **No escribas `~` en esa variable.** Docker Compose expande el `~` del `source`
+> de un bind pero no el de su `target`, así que `DOCKPILOT_PROJECTS_ROOT=~/proyectos`
+> monta el host en una carpeta literalmente llamada `~` dentro del contenedor. El
+> contenedor **arranca igual**, así que el fallo es silencioso: el despliegue del
+> proyecto levanta con el directorio de datos vacío. Con `$HOME/proyectos` se
+> expande en los dos sitios.
+
+**3. El panel no se puede parar desde el panel.** Está en su propio listado y su
+API puede pararlo, pausarlo o borrarlo, así que los botones que lo hacen están
+ocultos y lo que queda es un candado con el motivo. Lo que **no** se oculta es
+iniciar, reiniciar y reanudar: si ya está caído, esos botones son la única forma
+de levantarlo desde la interfaz.
+
+Ocultar el botón no es una garantía. Comprobado contra el panel real, **ninguna**
+política de reinicio de Docker recupera un `stop` que viene de la API —ni
+`unless-stopped`, ni `always`, ni `on-failure`—, porque Docker lo cuenta como
+parada deliberada y suspende la política. Si se para a mano:
+
+```bash
+docker compose start backend
+```
+
+### Variables de entorno
+
+| Variable | Por defecto | Para qué |
+| :--- | :--- | :--- |
+| `DOCKPILOT_PROJECTS_ROOT` | `$HOME` | Carpeta de proyectos compose: se monta y se usa como raíz del explorador |
+| `VITE_PROYECTOS_PROTEGIDOS` | `dockpilot` | Proyectos compose cuyas piezas no se pueden parar ni borrar desde el panel |
+| `VITE_RECURSOS_PROTEGIDOS` | — | Redes concretas que tampoco se pueden borrar, si no siguen el patrón `<proyecto>_default` |
+
+Las dos `VITE_` son de **build**, no de ejecución: cambiarlas exige reconstruir la
+imagen del frontend.
+
 ## Comandos
 
 | Comando | Qué hace |
@@ -95,6 +195,9 @@ Los Makefile lanzan los procesos en segundo plano y escriben sus logs en
 | `make up` / `make down` | Levanta o detiene backend y frontend |
 | `make backend-serve` | Solo el backend, con `--reload` |
 | `make frontend-serve` | Solo el frontend, con HMR |
+| `docker compose up -d --build` | Levanta el panel en contenedores |
+| `docker compose down` | Los detiene |
+| `docker compose start backend` | Levanta el backend si se paró a sí mismo |
 | `make test` | `pytest` + `vitest` |
 | `make lint` | `ruff` + `oxlint` |
 | `make build` | Typecheck y build de producción del frontend |
@@ -102,7 +205,7 @@ Los Makefile lanzan los procesos en segundo plano y escriben sus logs en
 
 ## API
 
-43 endpoints REST bajo `/api/v1`, más `GET /` y `GET /health`:
+44 endpoints REST bajo `/api/v1`, más `GET /` y `GET /health`:
 
 ```
 GET    /                             Raíz del servicio
@@ -110,6 +213,7 @@ GET    /health                       Comprobación de salud
 GET    /api/v1/containers                     Listado de contenedores
 POST   /api/v1/containers                     Crear contenedor
 GET    /api/v1/containers/prune               Contenedores parados que se pueden limpiar
+GET    /api/v1/containers/observed            Qué contenedores están observados ahora
 POST   /api/v1/containers/prune               Limpiar contenedores parados
 GET    /api/v1/containers/{id}                Detalle
 DELETE /api/v1/containers/{id}                Borrar
@@ -196,6 +300,7 @@ ausente o `504`.
 ```text
 .
 ├── Makefile              Atajos de desarrollo
+├── docker-compose.yml    Despliegue con contenedores
 ├── agent.md              Contexto, metodología y reglas del proyecto
 ├── backend/
 │   ├── app/
@@ -203,12 +308,16 @@ ausente o `504`.
 │   │   ├── schemas/      Contratos Pydantic
 │   │   ├── services/     Lógica de negocio
 │   │   └── core/         Acceso al cliente de Docker y traducción de errores
+│   ├── Dockerfile        Imagen de runtime, con el CLI de docker compose
 │   └── tests/            Suite pytest, con dobles de aiodocker
 ├── frontend/
+│   ├── Dockerfile        Build del SPA con Node, runtime con nginx
+│   ├── nginx.conf        Sirve el dist y reenvía /api y /ws
 │   └── src/
 │       ├── components/   UI, agrupada por recurso
 │       ├── hooks/        Estado y carga de datos
 │       ├── services/     Cliente HTTP
+│       ├── utils/        Formato, tasas y protecciones de la interfaz
 │       └── types/        Interfaces de TypeScript
 └── specs/                Especificaciones, una por funcionalidad
 ```
@@ -231,7 +340,7 @@ colores van siempre por token de tema y no se introduce texto en otro idioma.
 ## Verificación
 
 ```bash
-make test    # 540 pruebas de backend + 602 de frontend
+make test    # 556 pruebas de backend + 678 de frontend
 make lint    # ruff y oxlint
 make build   # typecheck y build
 ```
@@ -307,4 +416,13 @@ control del host, esa es exactamente la protección que encaja.
   lectura contra el daemon.
 - **`force` en el borrado de contenedores y redes es irreversible.** Corta la
   ejecución y, en redes, desconecta el tráfico.
+- **El socket de Docker equivale a root en la máquina.** Es lo que permite al panel
+  hacer su trabajo, y por eso no es una nota sobre esta implementación sino sobre
+  el programa: crear un contenedor con un `host_path` sin confinar es escribir
+  donde quiera en el host. Con el despliegue en contenedores el socket se monta
+  dentro, así que el panel sigue siendo root en el host desde dentro.
+- **El panel puede pararse a sí mismo.** Está en su propio listado y su API lo
+  permite. Los botones que lo detienen, pausan o borran están ocultos, pero eso es
+  un filtro de interfaz, no un control de acceso, y **ninguna** política de reinicio
+  lo recupera: hay que arrancarlo desde fuera.
 - El panel no aplica autenticación. No lo expongas fuera de `127.0.0.1`.

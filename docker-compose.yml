@@ -46,6 +46,13 @@ services:
       # es el que el usuario puso en su YAML, y el despliegue arrancaría
       # silenciosamente con el directorio vacío. Es el error nº1 de este
       # fichero y no se ve hasta que un compose levanta mal.
+      #
+      # Y la forma de escribirlo importa: `~` en `DOCKPILOT_PROJECTS_ROOT` NUNCA
+      # funciona, porque Compose expande el `~` de un `source` pero no el de su
+      # `target` ni el de `environment`. El resultado es un bind cuyo destino es
+      # literalmente una carpeta llamada `~`, y `COMPOSE_BROWSE_ROOT` apuntando a
+      # `/root/...`. El contenedor levanta igual, así que el fallo es silencioso.
+      # Se escribe `$HOME/proyectos`, que Compose expande en los dos sitios.
       - ${DOCKPILOT_PROJECTS_ROOT:-$HOME}:${DOCKPILOT_PROJECTS_ROOT:-$HOME}
     environment:
       # La raíz del explorador, que es la carpeta que el panel deja recorrer.
