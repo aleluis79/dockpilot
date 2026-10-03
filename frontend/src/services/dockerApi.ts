@@ -209,6 +209,17 @@ export const dockerApi = {
     return handleResponse<MetricsHistory>(res)
   },
 
+  /**
+   * Qué contenedores están fijados ahora mismo.
+   *
+   * Es la ruta que usa la tabla para enterarse de que un pin cambió sin recargar
+   * la lista entera, que sí es una `containers.list()` (SPEC-17 §4.9).
+   */
+  async listObserved(): Promise<string[]> {
+    const res = await fetch(`${BASE_URL}/containers/observed`)
+    return handleResponse<string[]>(res)
+  },
+
   /** Fija el contenedor para que se mida aunque nadie lo mire. */
   async watchContainer(id: string): Promise<WatchResponse> {
     const res = await fetch(`${BASE_URL}/containers/${id}/watch`, { method: 'POST' })

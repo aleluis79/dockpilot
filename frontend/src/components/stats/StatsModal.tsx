@@ -30,12 +30,18 @@ interface StatsModalProps {
   isOpen: boolean;
   container: ContainerSummary | null;
   onClose: () => void;
-  /**
-   * Avisa de que el pin cambió. La lista de contenedores pinta su propia
-   * «Observando» y no oye nada del canal: sin esto seguía diciendo lo que
-   * decía hasta el refresco manual (SPEC-17 §4.9).
+/**
+   * Avisa de que el pin se ha movido. La lista de contenedores pinta su propia
+   * «Observando» y no oye nada del canal: sin esto seguía diciendo lo que decía
+   * hasta el refresco manual (SPEC-17 §4.9).
+   *
+   * **No lleva el valor**, y a propósito. La lista lo relee del servidor en vez
+   * de creérselo a quien se lo cuenta, y así no hay dos escritores del mismo
+   * dato —esta llamada y la ruta de observados— que puedan discrepar. El aviso
+   * se manda también cuando el pin falla, porque entonces lo que hay que leer
+   * es otra vez, no nada.
    */
-  onObservedChange?: (containerId: string, observed: boolean) => void;
+  onObservedChange?: () => void;
 }
 
 type StatsLevel = 'ok' | 'warn' | 'critical'
@@ -157,15 +163,13 @@ export const StatsModal: React.FC<StatsModalProps> = ({
    * lo que contesta el backend, y el `observed` sale de la relectura que hace el
    * hook (SPEC-17 §4.3). Este botón ya no tiene nada que decidir, sólo que pedir.
    *
-   * Se avisa a la lista **sólo con el valor confirmado**. Un fallo deja el pin
-   * como estaba, así que avisar con `true`/`false` a ciegas pondría la píldora
-   * mintiendo justo cuando el backend acaba de decir que no.
+   * Se avisa a la lista pase lo que pase. Si el pin se aplicó, la lista tiene que
+   * enterarse; y si falló, la lista tampoco va a estar equivocada por avisar,
+   * porque lo que lee es el estado real y no lo que este botón quiso.
    */
   const toggleObservado = async () => {
-    const confirmado = await setObserved(!observed)
-    if (confirmado !== null && container) {
-      onObservedChange?.(container.id, confirmado)
-    }
+    await setObserved(!observed)
+    onObservedChange?.()
   }
 
   // Cerrar al presionar la tecla Escape

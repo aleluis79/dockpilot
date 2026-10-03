@@ -5,16 +5,18 @@ import { useContainers } from '../../src/hooks/useContainers'
 import type { ContainerSummary } from '../../src/types/docker'
 
 /**
- * Lo que se fija aquí es una decisión de diseño, no una casualidad: el cambio de
- * la fila se hace **en memoria y sin refetch**, como el renombrado de SPEC-19.
+ * El `observed` de la tabla no sale de la lista de contenedores: sale de
+ * `GET /containers/observed`, y aquí se superpone.
  *
- * La razón es que el backend ya contestar el valor nuevo en la respuesta del
- * `watch`. Refetcheon por un booleano recorre el host entero para volver a
- * aprender lo que el servidor acaba de decir, y la lista parpadea mientras.
+ * Dos cosas se fijan, y las dos importan:
  *
- * La otra mitad del contrato es igual de importante: el aviso tiene que existir.
- * Sin él, la píldora «Observando» de la tabla se queda en lo que decía hasta
- * el refresco manual, que es lo que pasaba.
+ * 1. **Superponer, no escribir.** Si el toggle del modal escribiera el valor en
+ *    la lista, habría dos escritores del mismo dato y una respuesta del sondeo
+ *    salida antes del POST podría llegar después y dejar la marca al revés un
+ *    ciclo entero. Con una sola fuente no hay carrera que ganar.
+ * 2. **Lo que no se relectura, no se arregla.** El pin puede desaparecer sin que
+ *    nadie avise —el TTL se lleva el anillo con el pin, y un reinicio del
+ *    backend se lleva todos—, y la lista tiene que enterarse por sí sola.
  */
 
 const c = (over: Partial<ContainerSummary> & { id: string }): ContainerSummary => ({
@@ -28,12 +30,24 @@ const c = (over: Partial<ContainerSummary> & { id: string }): ContainerSummary =
 })
 
 let lista: ContainerSummary[]
+let fijados: string[]
+let endpointFalla = false
 
 beforeEach(() => {
-  lista = [c({ id: 'c1' }), c({ id: 'c2', observed: true }), c({ id: 'c3' })]
+  lista = [c({ id: 'c1' }), c({ id: 'c2' }), c({ id: 'c3' })]
+  fijados = []
+  endpointFalla = false
+
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => ({ ok: true, status: 200, json: async () => lista }) as unknown as Response)
+    vi.fn(async (url: string) => {
+      const ruta = String(url)
+      if (ruta.endsWith('/containers/observed')) {
+        if (endpointFalla) throw new Error('no se pudo leer')
+        return { ok: true, status: 200, json: async () => fijados } as unknown as Response
+      }
+      return { ok: true, status: 200, json: async () => lista } as unknown as Response
+    })
   )
 })
 
@@ -42,60 +56,107 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
-const peticiones = () =>
-  (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(
-    ([url]: [string]) => String(url).includes('/containers')
+const peticionesALista = () =>
+  (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([url]: [string]) =>
+    String(url).includes('/containers') && !String(url).includes('/observed')
   ).length
 
-describe('useContainers · setObservedLocal', () => {
-  it('cambia la fila del contenedor indicado y sólo esa', async () => {
+const marcas = (cs: ContainerSummary[]) => cs.map((x) => [x.id, x.observed ?? false])
+
+describe('useContainers · el pin de observación', () => {
+  it('marca lo que dice la ruta de observados, no lo que traía la lista', async () => {
+    // La lista dice que c2 no está fijado y la ruta de observados que sí: si
+    // leyera la lista, la marca se perdería.
+    lista = [c({ id: 'c1' }), c({ id: 'c2' }), c({ id: 'c3', observed: true })]
+    fijados = ['c2']
+
     const { result } = renderHook(() => useContainers())
     await waitFor(() => expect(result.current.rawContainers).toHaveLength(3))
 
-    act(() => result.current.setObservedLocal('c1', true))
-
-    const porId = Object.fromEntries(result.current.rawContainers.map((x) => [x.id, x.observed]))
-    expect(porId).toEqual({ c1: true, c2: true, c3: undefined })
+    expect(marcas(result.current.rawContainers)).toEqual([
+      ['c1', false],
+      ['c2', true],
+      ['c3', false],
+    ])
   })
 
-  it('soltar el pin quita la marca en vez de ponerla a false', async () => {
+  it('la misma marca sale en la tabla y en el censo', async () => {
+    fijados = ['c3']
+
     const { result } = renderHook(() => useContainers())
     await waitFor(() => expect(result.current.rawContainers).toHaveLength(3))
 
-    act(() => result.current.setObservedLocal('c2', false))
-
-    expect(result.current.rawContainers.find((x) => x.id === 'c2')?.observed).toBe(false)
+    const enTabla = Object.fromEntries(marcas(result.current.containers))
+    const enCenso = Object.fromEntries(marcas(result.current.rawContainers))
+    expect(enTabla).toEqual(enCenso)
   })
 
-  it('no refetchea: el valor ya lo confirmó el backend', async () => {
+  it('soltar el pin en el servidor quita la marca sin tocar el resto de la fila', async () => {
+    fijados = ['c2']
     const { result } = renderHook(() => useContainers())
-    await waitFor(() => expect(result.current.rawContainers).toHaveLength(3))
-    const antes = peticiones()
+    await waitFor(() => expect(marcas(result.current.rawContainers)[1][1]).toBe(true))
 
-    act(() => result.current.setObservedLocal('c1', true))
+    // Es lo que pasa cuando el TTL expulsa el anillo o el backend se reinicia.
+    fijados = []
+    act(() => result.current.refreshObserved())
 
-    expect(peticiones()).toBe(antes)
+    await waitFor(() => expect(marcas(result.current.rawContainers)[1][1]).toBe(false))
+    expect(result.current.rawContainers[1]?.name).toBe('app-c2')
+    expect(result.current.rawContainers[1]?.image).toBe('nginx:alpine')
   })
 
-  it('un id que no está en la lista no rompe nada', async () => {
+  it('no refetchea la lista de contenedores al releer los pines', async () => {
     const { result } = renderHook(() => useContainers())
     await waitFor(() => expect(result.current.rawContainers).toHaveLength(3))
+    const antes = peticionesALista()
 
-    act(() => result.current.setObservedLocal('no-existe', true))
+    fijados = ['c1']
+    act(() => result.current.refreshObserved())
+    await waitFor(() => expect(marcas(result.current.rawContainers)[0][1]).toBe(true))
 
-    expect(result.current.rawContainers).toHaveLength(3)
+    // La razón de que exista la ruta aparte: esto no puede ser un
+    // `containers.list()` por enterarse de un booleano.
+    expect(peticionesALista()).toBe(antes)
   })
 
-  it('no toca el resto de campos de la fila', async () => {
+  it('sondea solo con la vista de contenedores delante', async () => {
+    const { rerender, unmount } = renderHook(
+      ({ activo }: { activo: boolean }) => useContainers({ activo }),
+      { initialProps: { activo: true } }
+    )
+    await waitFor(() =>
+      expect(
+        (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([u]: [string]) =>
+          String(u).includes('/observed')
+        )
+      ).toBe(true)
+    )
+
+    const antes =
+      (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([u]: [string]) =>
+        String(u).includes('/observed')
+      ).length
+
+    // Fuera de la vista: ni una más. Un panel en una pestaña en segundo plano no
+    // debería preguntar nada.
+    rerender({ activo: false })
+    await new Promise((r) => setTimeout(r, 30))
+    const durante =
+      (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls.filter(([u]: [string]) =>
+        String(u).includes('/observed')
+      ).length
+    expect(durante).toBe(antes)
+
+    unmount()
+  })
+
+  it('un fallo de la ruta no tira la lista ni pone una alerta roja', async () => {
+    endpointFalla = true
     const { result } = renderHook(() => useContainers())
+
     await waitFor(() => expect(result.current.rawContainers).toHaveLength(3))
-    const antes = result.current.rawContainers.find((x) => x.id === 'c3')
 
-    act(() => result.current.setObservedLocal('c3', true))
-    const despues = result.current.rawContainers.find((x) => x.id === 'c3')
-
-    expect(despues?.name).toBe(antes?.name)
-    expect(despues?.image).toBe(antes?.image)
-    expect(despues?.status).toBe(antes?.status)
+    // La lista sigue valiendo: es una marca lo único que puede quedar viejo.
+    expect(result.current.error).toBeNull()
   })
 })

@@ -111,6 +111,24 @@ async def prune_containers(
     return await ContainerService.prune_containers(docker=docker)
 
 
+@router.get("/observed", response_model=list[str])
+async def list_observed() -> list[str]:
+    """Qué contenedores están fijados **ahora mismo**, por id corto.
+
+    No llama al daemon: sale del diccionario en memoria del almacén de métricas,
+    que es de donde sale también el `observed` del listado (§4.9). Existe para
+    que la tabla pueda enterarse de que un pin cambió sin recargar la lista
+    entera —que sí es una `containers.list()`— y sobre todo para el caso que no
+    tiene botón: un reinicio del backend se lleva todos los pines porque viven
+    en memoria (§4.3), y la tabla seguiría diciendo «Observando» hasta que
+    alguien pulsara el refresco.
+
+    Va declarado antes que `/{container_id}` por la razón de siempre, y un test
+    lo fija igual que el de `prune`.
+    """
+    return sorted(get_store().observed_ids())
+
+
 @router.get("/{container_id}", response_model=ContainerDetail)
 async def get_container(
     docker: DockerDep,

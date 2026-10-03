@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { dockerApi } from '../services/dockerApi'
+import { useObservedIds } from './useObservedIds'
 import type { ContainerSummary } from '../types/docker'
 
 interface UseContainersOptions {
@@ -161,24 +162,24 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
   }, [])
 
   /**
-   * Refleja en el inventario local un cambio del pin de observación (SPEC-17).
+   * El pin de observación no sale de la lista: sale de `useObservedIds` y se
+   * superpone aquí.
    *
-   * Mismo criterio que `renameLocal`, y por el mismo motivo: el backend acaba de
-   * confirmar el valor nuevo en la respuesta del `watch`, así que la fila ya
-   * tiene su respuesta y no hay nada que volver a preguntar. Un refetch entero
-   * por un booleano recorrería el host para descubrir algo que ya sabemos.
-   *
-   * Sin esto, la píldora «Observando» de la tabla seguía diciendo lo que decía
-   * hasta que se pulsara el refresco manual o se cambiara de pestaña.
+   * Superponer y no escribir en `containers` es deliberado. Si el toggle del
+   * modal escribiera aquí su valor, habría dos escritores del mismo dato —esta
+   * ruta y el toggle— y una respuesta del sondeo que saliera antes del POST
+   * podría llegar después y dejar la marca al revés un ciclo entero. Con una
+   * sola fuente no hay carrera: quien escribe es el servidor.
    */
-  const setObservedLocal = useCallback((containerId: string, observed: boolean) => {
-    setContainers((previas) =>
-      previas.map((c) => (c.id === containerId ? { ...c, observed } : c))
-    )
-  }, [])
+  const { ids: observados, refresh: refreshObserved } = useObservedIds({ activo })
+
+  const conPin = useMemo(() => {
+    const fijados = new Set(observados)
+    return containers.map((c) => ({ ...c, observed: fijados.has(c.id) }))
+  }, [containers, observados])
 
   const filteredContainers = useMemo(() => {
-    return containers.filter((c) => {
+    return conPin.filter((c) => {
       // El estado se filtra en el navegador, y **antes** que la búsqueda: así el
       // buscador siempre trabaja sobre lo que se está viendo, que es lo que espera
       // quien escribe en él.
@@ -207,11 +208,14 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
         c.id.toLowerCase().includes(searchQuery.toLowerCase())
       return matchesSearch
     })
-  }, [containers, searchQuery, statusFilter, healthFilter])
+  }, [conPin, searchQuery, statusFilter, healthFilter])
 
   return {
     containers: filteredContainers,
-    rawContainers: containers,
+    // El pin también viene de `conPin` y no del snapshot del servidor: las dos
+    // listas tienen que contar lo mismo, o el mismo contenedor aparece fijado en
+    // la tabla y suelto en cualquier sitio que use `rawContainers`.
+    rawContainers: conPin,
     loading,
     error,
     statusFilter,
@@ -222,7 +226,9 @@ export function useContainers({ activo = true }: UseContainersOptions = {}) {
     setSearchQuery,
     actionInProgress,
     renameLocal,
-    setObservedLocal,
+    /** Releer qué está fijado. La llama el modal al mover el pin, para que la
+     *  marca salga ya en vez de esperar al siguiente tic del sondeo. */
+    refreshObserved,
     refetch: fetchContainers,
     executeAction,
   }

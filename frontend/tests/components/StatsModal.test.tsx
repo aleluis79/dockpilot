@@ -345,12 +345,16 @@ describe('StatsModal · serie temporal (SPEC-17)', () => {
 // La lista de contenedores tiene su propia «Observando» y no oye el canal de
 // métricas. Sin `onObservedChange`, unfijar el pin desde aquí dejaba la tabla
 // diciendo «Observando» hasta el refresco manual: la fila y el modal se
-// contradecían, y los dos tenían razón los unos treinta segundos.
+// contradecían, y los dos tenían razón hasta que alguien pulsara un botón.
+//
+// El aviso **no lleva el valor**: la lista relee del servidor. Por eso también
+// se manda cuando el pin falla —entonces lo que hay que releer es otra vez— y no
+// precisamente para eso, sino porque así no hay dos escritores del mismo dato.
 
 describe('StatsModal · aviso del pin a la lista', () => {
   const originalWebSocket = global.WebSocket
 
-  const abrirConAviso = (onObservedChange: (id: string, observed: boolean) => void) => {
+  const abrirConAviso = (onObservedChange: () => void) => {
     const utils = render(
       <StatsModal
         isOpen={true}
@@ -391,7 +395,7 @@ describe('StatsModal · aviso del pin a la lista', () => {
       }) as unknown as typeof fetch
     )
 
-  it('avisa con el valor confirmado al fijar el pin', async () => {
+  it('avisa al fijar el pin', async () => {
     stubPin()
     const aviso = vi.fn()
     const { getByRole } = abrirConAviso(aviso)
@@ -401,10 +405,12 @@ describe('StatsModal · aviso del pin a la lista', () => {
       fireEvent.click(getByRole('button', { name: /Observar/ }))
     })
 
-    expect(aviso).toHaveBeenCalledWith(mockContainer.id, true)
+    expect(aviso).toHaveBeenCalledTimes(1)
+    // Sin argumentos: el valor lo relee la lista del servidor.
+    expect(aviso).toHaveBeenCalledWith()
   })
 
-  it('avisa con false al soltar el pin, que es el caso que mentía', async () => {
+  it('avisa al soltar el pin, que es el caso que mentía', async () => {
     stubPin()
     const aviso = vi.fn()
     const { getByRole } = abrirConAviso(aviso)
@@ -414,10 +420,10 @@ describe('StatsModal · aviso del pin a la lista', () => {
       fireEvent.click(getByRole('button', { name: /Observando/ }))
     })
 
-    expect(aviso).toHaveBeenCalledWith(mockContainer.id, false)
+    expect(aviso).toHaveBeenCalledTimes(1)
   })
 
-  it('NO avisa si el pin falla: la lista no se inventa un cambio', async () => {
+  it('avisa también cuando el pin falla: lo que hay que releer es el estado', async () => {
     stubPin({ falla: true })
     const aviso = vi.fn()
     const { getByRole } = abrirConAviso(aviso)
@@ -427,7 +433,9 @@ describe('StatsModal · aviso del pin a la lista', () => {
       fireEvent.click(getByRole('button', { name: /Observar/ }))
     })
 
-    expect(aviso).not.toHaveBeenCalled()
+    // La lista lee la verdad, así que avisar no la puede hacer mentir.
+    expect(aviso).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Ya se observan 12.')).toBeInTheDocument()
   })
 
   it('funciona sin la prop: el modal no la da por hecha', async () => {

@@ -42,23 +42,25 @@ export function useDockerStats(
   }, [])
 
   /**
-   * Fijar o soltar el pin de observación. Devuelve el valor **confirmado por el
-   * backend**, o `null` si no se pudo: quien llama necesita distinguir «quedó
-   * fijado» de «no pasó nada», porque con `null` no hay que avisar a nadie.
+   * Fijar o soltar el pin de observación.
    *
-   * Lo que se pinta es lo que contesta el backend, nunca lo que se pidió: el
-   * pin vive en el servidor (SPEC-17 §4.3) y el que responde es el daemon. Por
-   * eso, además del POST/DELETE, se relee el historial: sin esa llamada el botón
-   * se quedaba como estaba para siempre, porque el `history` del WebSocket sólo
-   * se manda una vez, al conectar.
+   * No devuelve nada a propósito: el fallo se dice con `pinError`, y quien llama
+   * no necesita el valor porque no lo pinta —relee del servidor lo que hay— y
+   * así no hay dos escritores del mismo dato.
+   *
+   * Lo que se pinta aquí sí es lo que contesta el backend, nunca lo que se
+   * pidió: el pin vive en el servidor (SPEC-17 §4.3) y el que responde es el
+   * daemon. Por eso, además del POST/DELETE, se relee el historial: sin esa
+   * llamada el botón se quedaba como estaba para siempre, porque el `history` del
+   * WebSocket sólo se manda una vez, al conectar.
    *
    * El `observed` de la relectura **no** pisa el de la respuesta del pin: entre
    * el POST y el GET el anillo puede no haberse reapuntado todavía, y lo que el
    * backend acaba de confirmar sobre el pin es más reciente que ese GET.
    */
   const setObserved = useCallback(
-    async (observed: boolean): Promise<boolean | null> => {
-      if (!containerId) return null
+    async (observed: boolean): Promise<void> => {
+      if (!containerId) return
       setPinError(null)
       try {
         const fijado = observed
@@ -72,11 +74,8 @@ export function useDockerStats(
         // podido confirmar, y eso se dice en vez de fingir que no pasó.
         const metrics = await dockerApi.getContainerMetrics(containerId)
         setHistorial({ ...metrics, observed: fijado.observed })
-
-        return fijado.observed
       } catch (e) {
         setPinError(e instanceof Error ? e.message : 'No se pudo cambiar la observación')
-        return null
       }
     },
     [containerId]

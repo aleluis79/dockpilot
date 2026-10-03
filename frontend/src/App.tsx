@@ -40,7 +40,7 @@ function App() {
     actionInProgress,
     refetch,
     renameLocal,
-    setObservedLocal,
+    refreshObserved,
     executeAction,
   } = useContainers({ activo: activeView === 'containers' })
 
@@ -282,14 +282,14 @@ function App() {
         onClose={() => setContainerForLogs(null)}
       />
 
-      {/* Modal de Métricas en Vivo. `setObservedLocal` mantiene la píldora
-          «Observando» de la tabla al día sin refetchar: el backend ya confirmó
-          el valor en la respuesta del `watch` (SPEC-17 §4.9). */}
+      {/* Modal de Métricas en Vivo. `refreshObserved` hace que la píldora
+          «Observando» de la tabla se relea al mover el pin, sin refetchar la
+          lista entera (SPEC-17 §4.9). */}
       <StatsModal
         isOpen={!!containerForStats}
         container={containerForStats}
         onClose={() => setContainerForStats(null)}
-        onObservedChange={setObservedLocal}
+        onObservedChange={refreshObserved}
       />
 
       {/* Modal de Terminal Interactivo */}

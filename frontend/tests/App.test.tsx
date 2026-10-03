@@ -117,15 +117,20 @@ const stubFetchRespetandoFiltro = () => {
 /**
  * Cuántas veces se pidió la LISTA de contenedores, y sólo eso.
  *
- * El filtro excluye `/prune` a propósito. Con un `includes('/containers')` a
- * secas, la barra de limpieza de SPEC-21 —que pide su propio preaviso— hacía que
- * estos tests contaran dos peticiones donde preguntan por una, y el fallo
- * apuntaba al sitio equivocado. Un contador por prefijo ancho se rompe con
- * cualquier sub-recurso nuevo bajo el mismo prefijo.
+ * El filtro excluye las sub-rutas que cuelgan de `/containers` a propósito. Con
+ * un `includes('/containers')` a secas, la barra de limpieza de SPEC-21 —que
+ * pide su propio preaviso— y la de observados de SPEC-17 —que sondea los
+ * pines— hacen que estos tests cuenten peticiones donde preguntan por una, y el
+ * fallo apunte al sitio equivocado. Un contador por prefijo ancho se rompe con
+ * cualquier sub-recurso nuevo bajo el mismo prefijo, así que la exclusión es
+ * explícita y hay que ampliarla cada vez que se añada uno.
  */
 const contarContenedores = (fetchMock: { mock: { calls: unknown[][] } }) =>
   fetchMock.mock.calls.filter(
-    ([url]) => String(url).includes('/containers') && !String(url).includes('/prune')
+    ([url]) =>
+      String(url).includes('/containers') &&
+      !String(url).includes('/prune') &&
+      !String(url).includes('/observed')
   ).length
 
 describe('App · conmutador de vista', () => {

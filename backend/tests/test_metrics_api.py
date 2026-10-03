@@ -225,3 +225,78 @@ async def test_observar_expulsa_al_no_observado_para_entrar(async_client):
     assert r.status_code == 200
     assert get_store().is_observed("c123") is True
     assert get_store().tracked_ids().count("soltado") == 0
+
+
+# --- El listado de observados (SPEC-17 §4.9) ---------------------------------
+#
+# Existe para que la tabla no recargue la lista entera —que sí es una
+# `containers.list()`— para enterarse de que un pin cambió. Y sobre todo para el
+# caso que no tiene botón: un reinicio del backend se lleva todos los pines
+# porque viven en memoria (§4.3), y la tabla no tiene forma de enterarse si nadie
+# pregunta.
+
+
+async def test_observed_devuelve_los_pines_del_almacen(test_client):
+    get_store().observe("c1")
+    get_store().observe("c2")
+
+    r = test_client.get("/api/v1/containers/observed")
+
+    assert r.status_code == 200
+    # Ordenados, para que la respuesta sea estable y comparable entre tics.
+    assert r.json() == ["c1", "c2"]
+
+
+async def test_observed_devuelve_lista_vacia_si_no_hay_pines(test_client):
+    r = test_client.get("/api/v1/containers/observed")
+
+    assert r.status_code == 200
+    assert r.json() == []
+
+
+async def test_el_soltar_el_pin_se_refleja_en_el_listado(test_client):
+    get_store().observe("c1")
+    assert test_client.get("/api/v1/containers/observed").json() == ["c1"]
+
+    get_store().unobserve("c1")
+
+    assert test_client.get("/api/v1/containers/observed").json() == []
+
+
+async def test_el_pin_cae_al_expirar_antiguedad(test_client):
+    """El caso que esta ruta existe para cazar: el TTL se lleva el anillo y el
+    pin con él (§4.3), y la tabla se enteraría por aquí antes que por un refresco."""
+    store = get_store()
+    store.observe("c1")
+    store.ttl_s = 0.0
+
+    store.evict_expired()
+
+    assert test_client.get("/api/v1/containers/observed").json() == []
+
+
+async def test_observed_no_toca_el_daemon(test_client, mock_docker):
+    """Es una consulta al diccionario en memoria. Si algún día toca el daemon,
+    la tabla pasa a pagar un `containers.list()` cada vez que responde esto."""
+    async def _no_deberia_tocarse(*_a, **_kw):
+        raise AssertionError("este endpoint no debe llamar al daemon")
+
+    mock_docker.containers.list = _no_deberia_tocarse
+
+    assert test_client.get("/api/v1/containers/observed").status_code == 200
+
+
+async def test_observed_no_es_el_detalle_de_un_contenedor(test_client, mock_docker):
+    """`/observed` declarado después de `/{container_id}` haría que este GET fuera
+    el detalle de un contenedor llamado «observed»."""
+    async def listar(*_a, **_kw):
+        return []
+
+    mock_docker.containers.list = listar
+
+    r = test_client.get("/api/v1/containers/observed")
+
+    assert r.status_code == 200
+    # Un detalle trae `status`, `image` y `created`. Esto es una lista de ids.
+    assert isinstance(r.json(), list)
+    assert r.json() == []
