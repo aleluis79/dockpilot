@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import React from 'react'
-import { Play, Square, RotateCw, Pause, PlayCircle, Trash2, Loader2, FileText, Terminal as TerminalIcon, Activity } from 'lucide-react'
+import { Play, Square, RotateCw, Pause, PlayCircle, Trash2, Loader2, FileText, Terminal as TerminalIcon, Activity, ShieldAlert } from 'lucide-react'
 import type { ContainerSummary } from '../../types/docker'
+import { esContenedorDelPanel, MOTIVO_PROTEGIDO } from '../../utils/proteccion'
 
 interface ActionButtonsProps {
   container: ContainerSummary
@@ -29,6 +30,10 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
   const isRunning = container.status.toLowerCase() === 'running'
   const isPaused = container.status.toLowerCase() === 'paused'
   const isBusy = actionInProgress?.startsWith(container.id)
+  // Una pieza del panel no se puede parar, pausar ni borrar desde aquí. Iniciar,
+  // reanudar y reiniciar SÍ se dejan, y es lo importante: si el backend ya está
+  // caído, el botón de iniciar es lo único que lo levanta (SPEC-00).
+  const protegido = esContenedorDelPanel(container)
 
   if (isBusy) {
     return (
@@ -50,13 +55,15 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
           <Play className="w-4 h-4" />
         </button>
       ) : (
-        <button
-          onClick={() => onAction(container.id, 'stop')}
-          title={`Detener contenedor ${container.name}`}
-          className="p-1.5 text-fg-muted hover:text-amber-700 dark:hover:text-amber-400 hover:bg-amber-500/10 rounded transition-colors"
-        >
-          <Square className="w-4 h-4" />
-        </button>
+        !protegido && (
+          <button
+            onClick={() => onAction(container.id, 'stop')}
+            title={`Detener contenedor ${container.name}`}
+            className="p-1.5 text-fg-muted hover:text-amber-700 dark:hover:text-amber-400 hover:bg-amber-500/10 rounded transition-colors"
+          >
+            <Square className="w-4 h-4" />
+          </button>
+        )
       )}
 
       <button
@@ -67,7 +74,7 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
         <RotateCw className="w-4 h-4" />
       </button>
 
-      {isRunning && (
+      {isRunning && !protegido && (
         <button
           onClick={() => onAction(container.id, 'pause')}
           title={`Pausar contenedor ${container.name}`}
@@ -120,15 +127,21 @@ export const ActionButtons: React.FC<ActionButtonsProps> = ({
         </button>
       )}
 
-      <button
-        onClick={() =>
-          onRequestDelete ? onRequestDelete(container) : onAction(container.id, 'remove')
-        }
-        title={`Eliminar contenedor ${container.name}`}
-        className="p-1.5 text-fg-muted hover:text-rose-700 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors"
-      >
-        <Trash2 className="w-4 h-4" />
-      </button>
+      {protegido ? (
+        <span title={MOTIVO_PROTEGIDO} data-testid="accion-protegida" className="p-1.5 text-amber-600/70 dark:text-amber-400/70">
+          <ShieldAlert className="w-4 h-4" />
+        </span>
+      ) : (
+        <button
+          onClick={() =>
+            onRequestDelete ? onRequestDelete(container) : onAction(container.id, 'remove')
+          }
+          title={`Eliminar contenedor ${container.name}`}
+          className="p-1.5 text-fg-muted hover:text-rose-700 dark:hover:text-rose-400 hover:bg-rose-500/10 rounded transition-colors"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      )}
     </div>
   )
 }

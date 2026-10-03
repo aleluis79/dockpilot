@@ -2,6 +2,7 @@
 import React from 'react'
 import { Trash2, Network as NetworkIcon, Loader2 } from 'lucide-react'
 import type { NetworkSummary } from '../../types/network'
+import { esRedDelPanel } from '../../utils/proteccion'
 import { ComposeBadge } from '../compose/ComposeBadge'
 
 interface NetworksTableProps {
@@ -104,6 +105,16 @@ export const NetworksTable: React.FC<NetworksTableProps> = ({
                     title="Docker gestiona esta red y la recrea en cada arranque"
                   >
                     no se puede eliminar
+                  </span>
+                ) : esRedDelPanel(network.name) ? (
+                  // Mismo tratamiento que las de Docker y por el mismo motivo de
+                  // interfaz: no ofrecer un botón que va a ser rechazado un paso
+                  // más allá es peor que no ofrecerlo (SPEC-00).
+                  <span
+                    className="text-[11px] text-fg-subtle"
+                    title="Es la red del propio panel. Borrarla lo deja sin red, y no se puede rehacer desde aquí."
+                  >
+                    es del panel
                   </span>
                 ) : (
                   <button

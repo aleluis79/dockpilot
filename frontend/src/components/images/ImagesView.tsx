@@ -8,6 +8,7 @@ import { PullImageModal } from './PullImageModal'
 import { ImageDetailModal } from './ImageDetailModal'
 import { PruneDialog } from '../ui/PruneDialog'
 import { useImagePrunePreview } from '../../hooks/usePrune'
+import { esImagenDelPanel } from '../../utils/proteccion'
 import { formatBytes } from '../../utils/format'
 import type { LocalImageSummary } from '../../types/image'
 
@@ -123,6 +124,19 @@ export const ImagesView: React.FC<ImagesViewProps> = ({ onRunImage, onDeleted })
   const handleDelete = async (id: string, force: boolean) => {
     try {
       setActionError(null)
+      // `handleDelete` solo recibe el id, y una imagen no tiene proyecto compose:
+      // su identidad son los tags. Se buscan en la lista ya cargada, que es de
+      // donde sale todo lo que se pinta. Borrar la imagen del panel no lo apaga
+      // —eso es el contenedor—, pero deja su siguiente `up` sin poder
+      // arrancar, y eso es peor porque no se ve venir (SPEC-00).
+      const imagen = images.find((i) => i.id === id)
+      const esDelPanel = imagen?.tags.some((t) => esImagenDelPanel(t)) ?? false
+      if (esDelPanel) {
+        setActionError(
+          `«${imagen?.tags.join(', ')}» es la imagen del propio panel. No se puede eliminar desde aquí: el siguiente arranque se quedaría sin ella.`
+        )
+        return
+      }
       const result = await dockerApi.deleteImage(id, force)
       if (result.untagged.length > 0) {
         setActionError(

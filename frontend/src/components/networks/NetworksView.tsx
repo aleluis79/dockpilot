@@ -10,6 +10,7 @@ import {
   Broom,
   Eraser,
 } from 'lucide-react'
+import { esRedDelPanel } from '../../utils/proteccion'
 import { useNetworks } from '../../hooks/useNetworks'
 import { NetworksTable } from './NetworksTable'
 import { NetworkDetailModal } from './NetworkDetailModal'
@@ -49,6 +50,15 @@ export const NetworksView: React.FC = () => {
   const handleDelete = async () => {
     if (!networkToDelete) return
     const name = networkToDelete
+    // Borrar la red del panel lo deja sin red, que es el mismo punto ciego que
+    // borrar su contenedor: el servicio sigue levantado pero ya no habla con
+    // nadie. Se comprueba aquí y no solo en la tabla porque el diálogo de
+    // confirmación es el otro camino (SPEC-00).
+    if (esRedDelPanel(name)) {
+      setNetworkToDelete(null)
+      setNotice(`'${name}' es la red del propio panel y no se puede eliminar desde aquí`)
+      return
+    }
     const ok = await deleteNetwork(name)
     setNetworkToDelete(null)
     if (ok) setNotice(`Red '${name}' eliminada`)

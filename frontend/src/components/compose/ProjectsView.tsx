@@ -14,6 +14,7 @@ import { useComposeProjects } from '../../hooks/useComposeProjects'
 import { dockerApi } from '../../services/dockerApi'
 import { ProjectsTable } from './ProjectsTable'
 import { rutaDeProyecto } from '../../utils/compose'
+import { esProyectoDelPanel } from '../../utils/proteccion'
 import { ProjectDetailModal } from './ProjectDetailModal'
 import { ComposePlanModal } from './ComposePlanModal'
 import { ComposeActionPanel } from './ComposeActionPanel'
@@ -50,6 +51,8 @@ export function ProjectsView({ onNavigateTab, onRefrescar }: ProjectsViewProps) 
   const [selected, setSelected] = useState<ComposeProjectSummary | null>(null)
   const [planOpen, setPlanOpen] = useState<boolean>(false)
   const [accionando, setAccionando] = useState<ComposeProjectSummary | null>(null)
+  /** El proyecto del panel intentó pararse o bajarse. */
+  const [avisoProtegido, setAvisoProtegido] = useState<string | null>(null)
   const [accionActual, setAccionActual] = useState<ComposeAction | null>(null)
   const [bajando, setBajando] = useState<{
     proyecto: ComposeProjectSummary
@@ -68,6 +71,14 @@ export function ProjectsView({ onNavigateTab, onRefrescar }: ProjectsViewProps) 
    * se va a borrar, no cuántos: quien borra necesita el nombre en pantalla.
    */
   const bajarProyecto = async (proyecto: ComposeProjectSummary) => {
+    // Misma protección que en `onAccion`, y va aquí porque `down` **no pasa por
+    // `onAccion`**: la tabla lo enruta a `onBajar` porque necesita los nombres
+    // de los volúmenes antes de confirmar. Protegiendo solo `onAccion` el
+    // botón de bajar el panel quedaba abierto, que era el agujero entero (SPEC-00).
+    if (esProyectoDelPanel(proyecto.name)) {
+      setAvisoProtegido(proyecto.name)
+      return
+    }
     try {
       const detalle = await dockerApi.getComposeProject(proyecto.name)
       setBajando({ proyecto, volumenes: detalle.volumes.map((v) => v.name) })
@@ -228,12 +239,38 @@ export function ProjectsView({ onNavigateTab, onRefrescar }: ProjectsViewProps) 
             </div>
           </div>
 
+          {avisoProtegido && (
+            <div
+              role="alert"
+              data-testid="proyecto-protegido"
+              className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 rounded-xl text-xs"
+            >
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>
+                <span className="font-semibold">{avisoProtegido}</span> es el proyecto del propio
+                panel. Pararlo o bajarlo desde aquí lo apagaría y Docker no lo volvería a levantar.
+                «Subir» y «Registrar» siguen abiertos, que es lo que hace falta si ya está caído.
+              </span>
+            </div>
+          )}
+
           <ProjectsTable
             projects={projects}
             onSelect={setSelected}
             onAccion={(proyecto, accion) => {
               if (accion === 'logs') {
                 setViendoLogs(proyecto)
+                return
+              }
+              // `stop` y `down` sobre el proyecto del panel lo apagan entero,
+              // y por la misma razón que el botón de la tabla: Docker no lo
+              // vuelve a levantar. `up`, `pull` y `logs` siguen abiertos, que es
+              // justo lo que hace falta si ya está caído (SPEC-00).
+              if (
+                esProyectoDelPanel(proyecto.name) &&
+                (accion === 'stop' || accion === 'down')
+              ) {
+                setAvisoProtegido(proyecto.name)
                 return
               }
               setAccionando(proyecto)

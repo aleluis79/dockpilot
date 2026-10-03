@@ -3,6 +3,7 @@ import React, { useState } from 'react'
 import { MODAL_OVERLAY } from '../ui/modalOverlay'
 import { AlertTriangle, Trash2, X } from 'lucide-react'
 import type { ContainerSummary } from '../../types/docker'
+import { esContenedorDelPanel } from '../../utils/proteccion'
 
 /**
  * Descriptor genérico de lo que se va a eliminar.
@@ -52,6 +53,53 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
     target ?? (container ? { id: container.id, name: container.name } : null)
 
   if (!resolved) return null
+
+  // Segunda barrera, y no la primera. El botón de borrar no se pinta para un
+  // contenedor del panel, pero este modal es genérico y lo usan también las
+  // imágenes: si algún camino lo abriera, aquí se para en seco y se dice por qué,
+  // en vez de ofrecer un botón que dejaría el panel apagado sin red detrás
+  // (SPEC-00).
+  if (container && esContenedorDelPanel(container)) {
+    return (
+      <div className={`${MODAL_OVERLAY} p-4`} onClick={onClose}>
+        <div
+          className="w-full max-w-md bg-surface border border-default rounded-2xl shadow-2xl overflow-hidden p-6"
+          onClick={(e) => e.stopPropagation()}
+          role="alertdialog"
+          data-testid="borrado-protegido"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-3 bg-amber-500/10 text-amber-700 dark:text-amber-400 rounded-xl border border-amber-500/20">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <button
+              onClick={onClose}
+              className="p-1.5 text-fg-muted hover:text-fg hover:bg-fg/10 rounded-lg transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <h3 className="text-lg font-semibold text-fg mb-2">
+            &quot;{resolved.name}&quot; es el propio panel
+          </h3>
+          <p className="text-sm text-fg-muted">
+            No se puede eliminar desde aquí. Si lo hiciera, el panel quedaría apagado y Docker no
+            lo volvería a levantar, porque un <code className="font-mono">stop</code> que viene de
+            la API cuenta como parada deliberada y suspende la política de reinicio. Para
+            desmontarlo, desde fuera: <code className="font-mono">docker compose down</code>.
+          </p>
+          <div className="flex items-center justify-end mt-6">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-sm font-medium text-fg hover:text-fg bg-elevated hover:bg-fg/10 rounded-xl transition-colors"
+            >
+              Entendido
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const isRunning = container?.status.toLowerCase() === 'running'
   const resolvedWarning = warning ?? (isRunning ? RUNNING_WARNING : null)
