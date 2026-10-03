@@ -33,6 +33,40 @@ describe('puertos', () => {
     expect(makefile).not.toMatch(/PORT_FRONTEND\s*:=?\s*5173\b/)
   })
 
+  it('backend-serve arranca en el puerto declarado, no en uno escrito a mano', () => {
+    // La guarda anterior vigilaba la DECLARACION (`PORT_BACKEND := 8181`), que
+    // ya estaba bien, mientras `backend-serve` usaba un 8000 literal. Con el
+    // proxy de Vite en 8181 eso deja /api y /ws sin destino: la app carga y
+    // el único síntoma es el WebSocket de métricas que no conecta.
+    const makefile = leer('Makefile')
+    const serve = makefile.slice(makefile.indexOf('\nbackend-serve:'))
+    expect(serve).toMatch(/--port\s+\$\(PORT_BACKEND\)/)
+    expect(serve).not.toMatch(/--port\s+\d/)
+  })
+
+  it('ningún arranque de uvicorn lleva el puerto escrito a mano', () => {
+    // El derivado de `backend-serve` y `run.sh`, que es donde aparecieron los
+    // dos 8000. Un `--port` con un número al lado no tiene a qué desincronizarse:
+    // o es el 8000 de FastAPI, o es el día que alguien lo cambia y olvida el otro.
+    const arranques = [
+      leer('Makefile'),
+      leer('backend', 'run.sh'),
+    ].join('\n')
+
+    const puertos = arranques.match(/--port\s+[^\s\\]+/g) ?? []
+    expect(puertos.length).toBeGreaterThan(0)
+    for (const puerto of puertos) {
+      expect(puerto).not.toMatch(/--port\s+\d/)
+    }
+  })
+
+  it('run.sh deriva el puerto del Makefile en vez de repetirlo', () => {
+    const run = leer('backend', 'run.sh')
+    expect(run).toContain('PORT_BACKEND')
+    expect(run).toContain('../Makefile')
+    expect(run).not.toMatch(/--port\s+\d/)
+  })
+
   it('Vite sirve en el puerto del frontend y proxea al del backend', () => {
     const vite = leer('frontend', 'vite.config.ts')
 

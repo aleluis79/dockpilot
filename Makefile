@@ -66,7 +66,7 @@ backend-install:            ## Crea el virtualenv e instala dependencias
 	cd backend && .venv/bin/pip install -r requirements.txt
 
 backend-serve:              ## Inicia el servidor (uvicorn --reload)
-	cd backend && .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+	cd backend && .venv/bin/uvicorn app.main:app --reload --host 127.0.0.1 --port $(PORT_BACKEND)
 
 backend-test:               ## Ejecuta la suite de pruebas (pytest)
 	cd backend && PYTHONPATH=. .venv/bin/pytest -v

@@ -208,7 +208,7 @@ Característica: Gestión y control del ciclo de vida de contenedores locales
 - [x] **Fase 1: Preparación del Entorno y Dependencias**
   - [x] Instalar dependencias en backend (`aiodocker`, `pytest`, `pytest-asyncio`, `httpx`)
   - [x] Instalar dependencias en frontend (`lucide-react`, `vitest`, `@testing-library/react`, `jsdom`)
-  - [x] Configurar proxy de Vite en `frontend/vite.config.ts` hacia `http://127.0.0.1:8000`
+  - [x] Configurar proxy de Vite en `frontend/vite.config.ts` hacia `http://127.0.0.1:8181` (y `ws://127.0.0.1:8181` para `/ws`)
 - [x] **Fase 2: Contratos de Datos (Schemas & Types)**
   - [x] Crear `backend/app/schemas/container.py` con los modelos Pydantic
   - [x] Crear `frontend/src/types/docker.ts` con las interfaces TypeScript correspondientes
