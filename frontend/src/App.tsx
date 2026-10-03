@@ -48,6 +48,8 @@ function App() {
   const [containerToDelete, setContainerToDelete] = useState<ContainerSummary | null>(null)
   const [containerForLogs, setContainerForLogs] = useState<ContainerSummary | null>(null)
   const [containerForStats, setContainerForStats] = useState<ContainerSummary | null>(null)
+  /** El aviso de la última limpieza, a todo el ancho (SPEC-21). */
+  const [resultadoLimpieza, setResultadoLimpieza] = useState<{ mensaje: string; ok: boolean } | null>(null)
   const [containerForTerminal, setContainerForTerminal] = useState<ContainerSummary | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false)
   const [presetImage, setPresetImage] = useState<string>('')
@@ -110,6 +112,36 @@ function App() {
           </div>
         )}
 
+        {/* El aviso de una limpieza (SPEC-21). Vive aquí y no dentro de
+            `ContainersToolbar` porque la barra está encajada en la fila del
+            buscador: un cartel dentro suyo empieza donde acaba el buscador, a un
+            tercio del ancho, en vez de en el margen izquierdo. Es el mismo cartel
+            que usan Imágenes y Volúmenes, y por el mismo motivo: son avisos de
+            página, no controles de una fila. */}
+        {resultadoLimpieza && (
+          <div
+            data-testid="prune-resultado"
+            role="status"
+            className={`flex items-center justify-between gap-3 p-3 rounded-xl text-sm ${
+              resultadoLimpieza.ok
+                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400'
+                : 'bg-rose-500/10 border border-rose-500/20 text-rose-700 dark:text-rose-400'
+            }`}
+          >
+            <span className="break-words">{resultadoLimpieza.mensaje}</span>
+            <button
+              onClick={() => setResultadoLimpieza(null)}
+              className={`shrink-0 px-2 py-0.5 rounded text-xs font-semibold transition-colors ${
+                resultadoLimpieza.ok
+                  ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-400'
+                  : 'bg-rose-500/20 text-rose-700 dark:text-rose-400'
+              }`}
+            >
+              Descartar
+            </button>
+          </div>
+        )}
+
         {/* Conmutador de vista. La lista vive en `src/vistas.ts` porque la ayuda
             la recorre en sus tests: repetirla aquí era como se desfasó al
             añadir `Proyectos`. */}
@@ -160,7 +192,7 @@ function App() {
             Solo tiene sentido en esta pestaña: en Imágenes no aplicaría. */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             {/* Pills de Filtrado */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0">
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 min-w-0">
               {filterOptions.map((opt) => {
                 const active = statusFilter === opt.value
                 return (
@@ -228,6 +260,10 @@ function App() {
                 se renderiza desde este `App`. El botón avisa con `refetch` para
                 que el censo entero se vuelva a leer, y los contadores de las
                 píldoras no dependen de lo que se esté viendo (SPEC-18 §3.2). */}
+            {/* `sm:w-auto` importa: la fila del buscador es un hermano de las píldoras, y
+                el padre es `justify-between`. Sin `auto` esta fila mide el 100% a
+                partir de `sm`, las píldoras se quedan sin sitio y su
+                `overflow-x-auto` enseña un scroll horizontal en medio de la página. */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
               <div className="relative w-full sm:w-72">
                 <Search className="w-4 h-4 text-fg-muted absolute left-3 top-1/2 -translate-y-1/2" />
@@ -239,7 +275,10 @@ function App() {
                   className="w-full pl-9 pr-4 py-1.5 text-xs bg-surface border border-default rounded-xl text-fg placeholder-fg-muted focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50 transition-all"
                 />
               </div>
-              <ContainersToolbar onDeleted={refetch} />
+              <ContainersToolbar
+            onDeleted={refetch}
+            onResultado={(mensaje, ok) => setResultadoLimpieza({ mensaje, ok })}
+          />
             </div>
           </div>
 

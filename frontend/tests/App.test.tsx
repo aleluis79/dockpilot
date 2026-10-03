@@ -410,3 +410,170 @@ describe('App · limpieza de contenedores parados', () => {
     expect(leer()).toEqual(antes)
   })
 })
+
+// El aviso de una limpieza se pinta AQUÍ y no dentro de `ContainersToolbar`
+// (SPEC-21). La barra vive encajada en la fila del buscador, así que un cartel
+// dentro suyo empezaba donde acaba el buscador —a un tercio del ancho, o a media
+// pantalla con la ventana estrecha— en vez de en el margen izquierdo. Este
+// bloque es el que lo coloca a todo el ancho del contenido, como los de Imágenes
+// y Volúmenes.
+
+describe('App · el aviso de la limpieza', () => {
+  beforeEach(() => {
+    MockWebSocket.instances = []
+    // @ts-expect-error Mocking WebSocket
+    global.WebSocket = MockWebSocket
+    vi.stubGlobal('matchMedia', (query: string) => new MockMediaQueryList(query))
+    localStorage.clear()
+  })
+
+  const stubConPrune = (opts: { falla?: boolean } = {}) => {
+    const mock = vi.fn(async (url: string, init?: RequestInit) => {
+      const ruta = String(url)
+      if (ruta.includes('/containers/prune') && init?.method === 'POST') {
+        if (opts.falla) {
+          return {
+            ok: false,
+            status: 409,
+            json: async () => ({ detail: 'Ya hay un prune en marcha.' }),
+          } as unknown as Response
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            deleted: ['a4d168477d28'],
+            bytes_reclaimed: 155_648,
+            message: '1 contenedor parado eliminado',
+          }),
+        } as unknown as Response
+      }
+      if (ruta.includes('/containers/prune')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            stopped_count: 2,
+            stopped_bytes: 155_648,
+            stopped_names: ['peluchito', 'full-editor-db'],
+          }),
+        } as unknown as Response
+      }
+      return { ok: true, status: 200, json: async () => variosContenedores } as unknown as Response
+    })
+    vi.stubGlobal('fetch', mock)
+    return mock
+  }
+
+  const limpiar = async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('web-a')
+    fireEvent.click(screen.getByRole('button', { name: /limpiar parados/i }))
+    fireEvent.click(await screen.findByRole('button', { name: /^eliminar$/i }))
+    await waitFor(() => expect(screen.getByTestId('prune-resultado')).toBeInTheDocument())
+  }
+
+  it('el aviso aparece a todo el ancho, en el margen izquierdo', async () => {
+    stubConPrune()
+    await limpiar()
+
+    const cartel = screen.getByTestId('prune-resultado')
+    expect(cartel).toHaveTextContent('1 contenedor parado eliminado')
+    expect(cartel).toHaveTextContent('152.0 KB recuperados')
+
+    // Fuera de la fila del buscador: hermano del contenido, no descendiente de
+    // la barra. Es lo que lo pone desde el margen izquierdo.
+    const filaDelBuscador = screen.getByPlaceholderText(/buscar por nombre/i).closest('div')
+      ?.parentElement
+    expect(filaDelBuscador).not.toContainElement(cartel)
+  })
+
+  it('el aviso se descarta', async () => {
+    stubConPrune()
+    await limpiar()
+
+    fireEvent.click(within(screen.getByTestId('prune-resultado')).getByText('Descartar'))
+
+    expect(screen.queryByTestId('prune-resultado')).not.toBeInTheDocument()
+  })
+
+  it('un fallo sale en el cartel de error, no en el de éxito', async () => {
+    stubConPrune({ falla: true })
+    await limpiar()
+
+    const cartel = screen.getByTestId('prune-resultado')
+    expect(cartel).toHaveTextContent('Ya hay un prune en marcha.')
+    expect(cartel.className).toContain('rose')
+    expect(cartel.className).not.toContain('emerald')
+  })
+})
+
+// La fila del buscador y las píldoras son hermanos, y el padre es
+// `justify-between`. Eso obliga a que la fila del buscador sea `sm:w-auto`: si
+// mide el 100%, se come el espacio de las píldoras y su `overflow-x-auto`
+// muestra un scroll horizontal en medio de la página. Ya pasó dos veces por
+// cambiar una clase sin mirar la otra, así que queda comprobado aquí.
+
+describe('App · la fila del buscador no desplaza las píldoras', () => {
+  beforeEach(() => {
+    MockWebSocket.instances = []
+    stubFetchRespetandoFiltro()
+    // @ts-expect-error Mocking WebSocket
+    global.WebSocket = MockWebSocket
+    vi.stubGlobal('matchMedia', (query: string) => new MockMediaQueryList(query))
+    localStorage.clear()
+  })
+
+  it('la fila del buscador conserva el ancho automático a partir de sm', async () => {
+    const { container } = render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('web-a')
+
+    const filaDelBuscador = screen.getByPlaceholderText(/buscar por nombre/i).closest('div')
+      ?.parentElement
+
+    // `w-full` a secas es el fallo: en `sm+` mide el 100% y las píldoras se
+    // quedan sin sitio.
+    expect(filaDelBuscador?.className).toContain('sm:w-auto')
+    expect(container.querySelectorAll('.overflow-x-auto').length).toBeGreaterThan(0)
+  })
+
+  it('las píldoras se pueden encoger para no empujar nada', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('web-a')
+
+    // `overflow-x-auto` sin `min-w-0` no baja de su tamaño mínimo, así que en
+    // vez de dejar que la fila del buscador ceda, empuja ella y sale el scroll.
+    const pills = screen.getByRole('button', { name: /^Todos/ }).closest('div')
+    expect(pills?.className).toContain('overflow-x-auto')
+    expect(pills?.className).toContain('min-w-0')
+  })
+
+  it('la barra de limpieza no se estira ni se reparte un ancho fijo', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await waitFor(() => screen.getByRole('button', { name: /limpiar parados/i }))
+
+    const barra = screen.getByRole('button', { name: /limpiar parados/i }).parentElement
+      ?.parentElement
+    // `flex-1` colapsa dentro de un padre de ancho automático, y `sm:w-72`
+    // parte el texto de la píldora.
+    expect(barra?.className).not.toContain('flex-1')
+    expect(barra?.className).not.toContain('sm:w-72')
+    expect(barra?.className).toContain('min-w-0')
+  })
+})

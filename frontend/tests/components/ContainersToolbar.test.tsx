@@ -149,3 +149,123 @@ describe('ContainersToolbar · limpieza (SPEC-21)', () => {
     expect(screen.getByRole('button', { name: /Limpiar parados/ })).toBeDisabled()
   })
 })
+
+// --- El aviso sube al padre (SPEC-21) ----------------------------------------
+//
+// La barra no pinta el resultado: lo sube con `onResultado` y lo pinta `App`, a
+// todo el ancho. Encajado en la fila del buscador, el mensaje empezaba donde
+// acababa el buscador —a un tercio del ancho, o a media pantalla si la ventana
+// es estrecha— en vez de en el margen izquierdo.
+//
+// El aviso lleva `ok` porque un fallo tiene que verse en el cartel de error y
+// no en el de éxito: un 409 pintado de verde se lee como una limpieza hecha.
+
+describe('ContainersToolbar · el aviso sube al padre', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const stub = (opts: { falla?: boolean } = {}) => {
+    const mock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      const ruta = String(url)
+      if (ruta.includes('/containers/prune') && init?.method === 'POST') {
+        if (opts.falla) {
+          return Promise.resolve({
+            ok: false,
+            status: 409,
+            json: async () => ({ detail: 'Ya hay un prune en marcha.' }),
+          })
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            deleted: ['a4d168477d28'],
+            bytes_reclaimed: 155_648,
+            message: '1 contenedor parado eliminado',
+          }),
+        })
+      }
+      if (ruta.includes('/containers/prune')) {
+        return Promise.resolve({ ok: true, status: 200, json: async () => PREVIEW })
+      }
+      return Promise.resolve({ ok: true, status: 200, json: async () => [] })
+    })
+    vi.stubGlobal('fetch', mock)
+    return mock
+  }
+
+  const limpiar = async (onResultado = vi.fn()) => {
+    render(<ContainersToolbar onDeleted={vi.fn()} onResultado={onResultado} />)
+    await waitFor(() => screen.getByRole('button', { name: /Limpiar parados/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Limpiar parados/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Eliminar' }))
+    await waitFor(() => expect(onResultado).toHaveBeenCalled())
+    return onResultado
+  }
+
+  it('informa del resumen con los bytes recuperados y ok a true', async () => {
+    stub()
+    const aviso = await limpiar()
+
+    expect(aviso).toHaveBeenCalledWith(
+      '1 contenedor parado eliminado · 152.0 KB recuperados',
+      true
+    )
+  })
+
+  it('informa también del fallo, con ok a false', async () => {
+    stub({ falla: true })
+    const aviso = await limpiar()
+
+    expect(aviso).toHaveBeenCalledWith('Ya hay un prune en marcha.', false)
+  })
+
+  it('no pinta ningún cartel dentro de la barra', async () => {
+    stub()
+    const aviso = await limpiar()
+
+    // El cartel es de `App`. Si la barra lo pintara, el mensaje volvería a
+    // empezar donde el buscador.
+    expect(aviso).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.queryByText('Descartar')).not.toBeInTheDocument()
+  })
+
+  it('funciona sin la prop: la barra no la da por hecha', async () => {
+    stub()
+    render(<ContainersToolbar onDeleted={vi.fn()} />)
+    await waitFor(() => screen.getByRole('button', { name: /Limpiar parados/ }))
+
+    fireEvent.click(screen.getByRole('button', { name: /Limpiar parados/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Eliminar' }))
+
+    // Ni prop ni estado propio: limpiar sigue funcionando y no rompe nada.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /Limpiar parados/ })).toBeInTheDocument()
+    )
+  })
+
+it('la píldora y el botón no se reparten un ancho fijo', async () => {
+    stub()
+    render(<ContainersToolbar onDeleted={vi.fn()} />)
+    await waitFor(() => screen.getByTestId('containers-prune-pendiente'))
+
+    const columna = screen.getByTestId('containers-prune-pendiente').parentElement?.parentElement
+    expect(columna?.className).toContain('min-w-0')
+    // Ni `flex-1` ni `sm:w-72`. `flex-1` arrastra `flex-basis: 0` y colapsa
+    // dentro de un padre de ancho automático; `sm:w-72` partía el texto de la
+    // píldora en varias líneas.
+
+    const fila = columna?.firstElementChild
+    expect(fila?.className).toContain('flex-wrap')
+
+    const pildora = screen.getByTestId('containers-prune-pendiente')
+    expect(pildora.className).toContain('whitespace-nowrap')
+    expect(pildora.className).toContain('shrink-0')
+  })
+})
