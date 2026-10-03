@@ -1,0 +1,45 @@
+# Contexto de build: `frontend/`. Verifica que existe con
+#   docker build -f frontend/Dockerfile frontend
+#
+# `node_modules/` es la línea que importa: pesa cientos de megabytes y, sobre
+# todo, es un árbol de binarios nativo compilado para la máquina que construyó
+# el host. Copiarlo dentro de la imagen y luego ejecutar `pnpm install` encima
+# deja una mezcla de binarios de otra máquina con los de la nueva, que es una forma
+# larga de descubrir que `node_modules` es de la arquitectura equivocada.
+
+node_modules/
+dist/
+.vite/
+
+# Los tipos que genera el build de TypeScript. `tsc -b` los regenera siempre
+# y, si viajan en el contexto, pueden hacer que el compilador se los salté
+# creyendo que están al día.
+*.tsbuildinfo
+
+__pycache__/
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+.git/
+.gitignore
+.git*
+
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea
+
+# Ficheros de entorno: nunca deben entrar en una imagen.
+.env
+.env.*
+*.local
+
+Dockerfile
+.dockerignore
+
+# Documentación y utilidades que el runtime de nginx no usa. Los tests NO se
+# excluyen a propósito: en el frontend la imagen final es nginx y no los lleva,
+# pero la etapa de build sí los tiene y así se puede comprobar en el sitio donde
+# se compila y no solo en local.

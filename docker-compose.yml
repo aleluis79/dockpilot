@@ -1,0 +1,129 @@
+# DockPilot · el sitio entero (SPEC-00)
+#
+# Levanta las dos piezas ya probadas por separado:
+#
+#   docker compose up -d --build     http://localhost:8182
+#   docker compose down
+#
+# El punto de todo este fichero está en una línea: el socket de Docker. El panel
+# es un gestor de contenedores, así que necesita hablar con el daemon del HOST.
+# Eso es `docker-outside-of-docker`, el patrón normal para este tipo de programa,
+# y significa que el backend tiene **root en el host**. No es un defecto de esta
+# configuración: es la función del programa, y por eso al final está lo que se
+# puede hacer y lo que no.
+
+services:
+  # ---------------------------------------------------------------------------
+  # El backend: FastAPI, el que habla con el daemon.
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+    image: dockpilot-backend:latest
+    init: true
+    # `restart` no recupera de una parada deliberada, y el panel puede pararse a
+    # sí mismo desde su propia API. Está aquí para recuperarse de un CRASH o de
+    # un reinicio de la máquina, que es lo único que la política cubre. La nota
+    # del final tiene los tres datos de por qué no cubre el auto-parado.
+    restart: unless-stopped
+    ports:
+      # Solo en loopback, y no en todas las interfaces a propósito. El backend
+      # tiene el socket de Docker montado: exponerlo en la red local significaría
+      # que cualquiera que llegue a este puerto puede crear contenedores con un
+      # `host_path` sin confinar, es decir, root en la máquina. El frontend sí
+      # puede ir en todas las interfaces si el panel lo va a usar desde otro
+      # sitio; el backend no.
+      - "127.0.0.1:8181:8181"
+    volumes:
+      # El socket del daemon. Es el requisito que no es negociable: sin él el
+      # panel no arranca con nada que hacer.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Los proyectos compose, en la MISMA ruta absoluta dentro y fuera.
+      #
+      # No es una curiosidad. El daemon resuelve los `volumes: ./datos` de un
+      # compose RELATIVOS al directorio del proyecto, en el HOST. Si aquí el
+      # proyecto se montase en otra ruta, `./datos` apuntaría a un sitio que no
+      # es el que el usuario puso en su YAML, y el despliegue arrancaría
+      # silenciosamente con el directorio vacío. Es el error nº1 de este
+      # fichero y no se ve hasta que un compose levanta mal.
+      - ${DOCKPILOT_PROJECTS_ROOT:-$HOME}:${DOCKPILOT_PROJECTS_ROOT:-$HOME}
+    environment:
+      # La raíz del explorador, que es la carpeta que el panel deja recorrer.
+      # El default de la app es tu home, y aquí se declara explícitamente para
+      # que se vea que la variable existe y para poder cambiarla.
+      COMPOSE_BROWSE_ROOT: ${DOCKPILOT_PROJECTS_ROOT:-$HOME}
+      # El puerto del frontend es de donde el backend deriva sus CORS, y en
+      # producción el proxy hace que nada sea cross-origin. Se pone para que
+      # `/docs` siga siendo coherente con lo que espera la configuración.
+      FRONTEND_PORT: "8182"
+
+  # ---------------------------------------------------------------------------
+  # El frontend: nginx sirviendo el dist y reenviando /api y /ws.
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+    image: dockpilot-frontend:latest
+    restart: unless-stopped
+    ports:
+      # A todas las interfaces a propósito, y es la diferencia con el backend:
+      # aquí solo hay HTML y JS. Si el panel se va a usar desde otro equipo,
+      # este es el puerto que se abre.
+      - "8182:80"
+    depends_on:
+      backend:
+        # Y no `service_started`, que solo espera a que arranque. Con el panel
+        # recién levantado, un `started` deja al proxy receives peticiones antes
+        # de que el backend esté importando aiodocker: el SPA carga y el primer
+        # clic da un 502 que se confunde con un fallo de la imagen.
+        condition: service_healthy
+
+# ---------------------------------------------------------------------------
+# Seguridad: qué se puede hacer y qué no
+# ---------------------------------------------------------------------------
+#
+# ¿Puede el panel pararse o borrarse a sí mismo? **Sí, y está demostrado**: se ve
+# en su propio listado y `POST /api/v1/containers/{su_id}/stop` lo deja `exited`.
+#
+# No se puede impedir desde aquí, y conviene decirlo claro en vez de prometer lo
+# contrario: para hacer falta habría que filtrar por id de contenedor, y un
+# proxy filtrante filtra por RUTA de la API, no por objetivo. El panel necesita
+# `stop`, `start`, `remove` y `create` sobre cualquier contenedor —es su
+# trabajo—, así que `POST /containers/{cualquiera}/stop` siempre tiene que pasar.
+#
+# Y `restart:` NO lo arregla. Se comprobó con el backend real, auto-parándose
+# desde su propia API, y NONE de las tres políticas lo recuperó:
+#
+#   unless-stopped -> exited   always -> exited   on-failure:5 -> exited
+#
+# Ni siquiera `on-failure`, y no porque el código de salida fuera cero —fue 137—
+# sino porque Docker registra un `stop` que venga de la API o de `docker stop` como
+# una parada DELIBERADA, y con esa marca suspende la política de reinicio sea cual
+# sea. Lo único que la limpia es arrancar el contenedor a mano.
+#
+# Consecuencia práctica: `docker compose up -d` deja de ser idempotente. Si el
+# panel se para a sí mismo, hay que acordarse de `docker compose start backend`.
+#
+# Lo único que sí lo evita es no dejar que llegue a pulsarse: filtrar en el
+# frontend los botones de parar y borrar cuando el contenedor es el propio
+# panel. Es la única mitigación que no le cuesta shampoo al usuario, y es un
+# cambio de frontend, no de este fichero.
+#
+# Lo que este fichero sí hace:
+#
+# - Publicar el backend solo en loopback, así que aunque alguien alcance el
+#   puerto, no es desde la red local.
+# - Exigir que el backend esté `healthy` antes de que el proxy reciba una sola
+#   petición.
+#
+# Y lo que endurece de verdad, si se quiere perder algo de comodidad:
+#
+#   backend:
+#     user: "${UID}:${GID}"
+#     group_add:
+#       - "${DOCKER_GID}"      # el GID del grupo docker del HOST
+#
+# Sin `group_add` el panel se queda sin hablar con el daemon, porque el socket es
+# del grupo `docker` y ese GID cambia de máquina a máquina. Y el bind de
+# proyectos necesita que el usuario tenga permiso de escritura en él, porque
+# SPEC-15 escribe el temporal del despliegue junto al compose.

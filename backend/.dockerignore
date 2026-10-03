@@ -1,0 +1,41 @@
+# Contexto de build: `backend/`. Verifica que existe con
+#   docker build -f backend/Dockerfile backend
+#
+# La línea que de verdad importa es `.venv/`. El venv local es un Python 3.14
+# con binarios compilados para la máquina, y si se colara en la imagen daría
+# exactamente el fallo más difícil de diagnosticar que hay: `python` resuelva
+# contra el venv copiado en vez de contra el intérprete del sistema, y todo
+# funcionaría salvo lo que dependa de la versión exacta de una biblioteca.
+
+.venv/
+venv/
+env/
+
+# Bytecode y cachés: no aportan nada a la imagen y ensucian el diff.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# El contexto es `backend/`, así que el `.git` sería el del repo si alguien
+# construyese desde la raíz por error.
+.git/
+.gitignore
+
+# Ficheros de entorno: nunca deben entrar en una imagen, y aquí no hay ninguno,
+# pero el patrón deja el sitio preparado para cuando los haya.
+.env
+.env.*
+*.local
+
+# Lo que se excluye aquí es lo que no debe ENTRAR en el contexto de build. Que
+# un fichero llegue al contexto no significa que acabe en la imagen: el Dockerfile
+# copia solo `app/` y `pyproject.toml`.
+#
+# `tests/` NO se excluye a propósito. El Dockerfile no lo copia, así que una
+# imagen de runtime no lleva tests —que es lo correcto—, pero dejarlo en el
+# contexto hace que añadir `COPY tests ./tests` sea una línea si algún día se
+# quiere una imagen que también sirva para reproducir un fallo.
+Dockerfile
+.dockerignore
