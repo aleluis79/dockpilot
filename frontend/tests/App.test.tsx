@@ -74,6 +74,7 @@ const variosContenedores = [
   { id: 'c2', name: 'web-b', image: 'nginx', status: 'running', state: 'Up 1 hour', created: 1727290000, ports: [] },
   { id: 'c3', name: 'viejo', image: 'postgres', status: 'exited', state: 'Exited (0) 3 days ago', created: 1727290000, ports: [] },
   { id: 'c4', name: 'en-pausa', image: 'redis', status: 'paused', state: 'Up 5 minutes (Paused)', created: 1727290000, ports: [] },
+  // Con salud, para que los filtros de SPEC-18 tengan algo que filtrar.
 ]
 
 const stubFetch = () => {
@@ -545,7 +546,7 @@ describe('App · la fila del buscador no desplaza las píldoras', () => {
     expect(container.querySelectorAll('.overflow-x-auto').length).toBeGreaterThan(0)
   })
 
-  it('las píldoras se pueden encoger para no empujar nada', async () => {
+it('las píldoras se reparten en varias líneas en vez de cortar en scroll', async () => {
     render(
       <ThemeProvider>
         <App />
@@ -553,11 +554,33 @@ describe('App · la fila del buscador no desplaza las píldoras', () => {
     )
     await screen.findByText('web-a')
 
-    // `overflow-x-auto` sin `min-w-0` no baja de su tamaño mínimo, así que en
-    // vez de dejar que la fila del buscador ceda, empuja ella y sale el scroll.
+    // Con `overflow-x-auto` las píldoras no bajaban de línea: se cortaban, y el
+    // último botón quedaba a medio ver con un scroll horizontal en medio de la
+    // página. Envolver es lo que hace que todo sea alcanzable.
     const pills = screen.getByRole('button', { name: /^Todos/ }).closest('div')
-    expect(pills?.className).toContain('overflow-x-auto')
-    expect(pills?.className).toContain('min-w-0')
+    expect(pills?.className).toContain('flex-wrap')
+    expect(pills?.className).not.toContain('overflow-x-auto')
+  })
+
+  it('el buscador baja a su línea cuando no cabe, en vez de apretar a las píldoras', async () => {
+    render(
+      <ThemeProvider>
+        <App />
+      </ThemeProvider>
+    )
+    await screen.findByText('web-a')
+
+    // Las tres cosas que compiten por el ancho son las píldoras, el buscador y
+    // el aviso de basura para limpiar. El `flex-wrap` del padre es lo que hace
+    // que el buscador baje entero en vez de dejar el botón de limpiar a medias.
+    const fila = screen.getByPlaceholderText(/buscar por nombre/i).closest('div')
+      ?.parentElement?.parentElement
+    expect(fila?.className).toContain('flex-wrap')
+    // Solo la fila de filtros y el buscador: el `overflow-x-auto` que queda en
+    // la app es el de las tablas, que sí lo necesitan.
+    expect(screen.getByRole('button', { name: /^Todos/ }).closest('div')?.className).not.toContain(
+      'overflow-x-auto'
+    )
   })
 
   it('la barra de limpieza no se estira ni se reparte un ancho fijo', async () => {
@@ -577,3 +600,10 @@ describe('App · la fila del buscador no desplaza las píldoras', () => {
     expect(barra?.className).toContain('min-w-0')
   })
 })
+
+// Los dos filtros de salud y el botón «Todos» (SPEC-18)
+//
+// Los dos fallos eran el mismo error en dos sitios: hay DOS filtros y cada uno se
+// limpiaba por su cuenta. «Todos» solo quitaba el de estado, así que elegir «Con
+// problemas» y volver a «Todos» no cambiaba nada y la tabla seguía vacía; y las
+// píldoras de salud no alternaban, así que no había ninguna forma de salir.

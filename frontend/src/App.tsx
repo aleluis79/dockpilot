@@ -190,9 +190,21 @@ function App() {
           <>
         {/* Toolbar de contenedores: filtros por estado y búsqueda.
             Solo tiene sentido en esta pestaña: en Imágenes no aplicaría. */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          {/* `flex-wrap` y no `overflow` en las píldoras, por una razón que se
+              vio con la barra de limpieza. Estas tres cosas compiten por el
+              ancho: las píldoras de filtro, el buscador y el aviso de cuánta
+              basura hay para limpiar. Con hueco de sobra van en una línea; en
+              cuanto aparece el aviso, deja de caber y había dos formas de
+              romper: cortar las píldoras —que es lo que pasaba con
+              `overflow-x-auto`— o dejar que el botón de limpiar cayera a una
+              segunda línea y descuadrara la fila.
+
+              Con `flex-wrap` aquí y en las píldoras no hay ninguna de las dos: si
+              no cabe, el buscador baja a su línea y las píldoras se reparten en
+              las suyas. El scroll horizontal desaparece del todo. */}
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center justify-between gap-x-4 gap-y-3">
             {/* Pills de Filtrado */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
               {filterOptions.map((opt) => {
                 const active = statusFilter === opt.value
                 return (
@@ -260,10 +272,11 @@ function App() {
                 se renderiza desde este `App`. El botón avisa con `refetch` para
                 que el censo entero se vuelva a leer, y los contadores de las
                 píldoras no dependen de lo que se esté viendo (SPEC-18 §3.2). */}
-            {/* `sm:w-auto` importa: la fila del buscador es un hermano de las píldoras, y
-                el padre es `justify-between`. Sin `auto` esta fila mide el 100% a
-                partir de `sm`, las píldoras se quedan sin sitio y su
-                `overflow-x-auto` enseña un scroll horizontal en medio de la página. */}
+            {/* `sm:w-auto` importa por lo mismo que antes: con `w-full` esta
+                fila mide el 100%, se come el espacio de las píldoras y el
+                `justify-between` del padre deja de repartir nada. El `flex-1`
+                que tiene la barra de limpieza es lo que le cede el sitio a ella
+                dentro de esta fila. */}
             <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full sm:w-auto">
               <div className="relative w-full sm:w-72">
                 <Search className="w-4 h-4 text-fg-muted absolute left-3 top-1/2 -translate-y-1/2" />
